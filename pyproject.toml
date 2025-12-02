@@ -1,0 +1,18 @@
+[project]
+name = "telegram-gateway"
+version = "0.1.0"
+description = "FastAPI gateway for Telegram webhooks"
+authors = [
+    { name = "Valery Zimichev", email = "valerii.zimichev@gmail.com" }
+]
+
+[tool.poetry.dependencies]
+python = "^3.14"
+fastapi = "^0.123.2"
+uvicorn = "^0.38.0"
+httpx = "^0.28.1"
+python-dotenv = "^1.0.1"
+pydantic-settings = "^2.3.0"
+
+[tool.poetry]
+package-mode = false
