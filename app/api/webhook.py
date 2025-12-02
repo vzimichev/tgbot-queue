@@ -22,7 +22,9 @@ class TelegramWebhookResponse(BaseModel):
 @router.post("/webhook", response_model=TelegramWebhookResponse)
 async def telegram_webhook(
     request: Request,
-    telegram_secret_token: Optional[str] = Header(None, convert_underscores=False),
+    telegram_secret_token: Optional[str] = Header(
+        None, alias="X-Telegram-Bot-Api-Secret-Token", convert_underscores=False
+    ),
 ):
     # Validate secret token
     if (
