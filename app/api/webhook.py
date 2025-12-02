@@ -2,10 +2,11 @@ import json
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Header, HTTPException, Request, status
+from fastapi import APIRouter, Body, Header, HTTPException, status
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.services.rabbitmq import rabbit
 from app.services.telegram import send_message
 
 router = APIRouter()
@@ -37,23 +38,22 @@ async def telegram_webhook(
         )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
-    # Log incoming request
-    logger.info("Incoming webhook body: %s", json.dumps(body))
+    # Log
+    logger.info("Incoming webhook body: %s", json.dumps(body, ensure_ascii=False))
 
+    # Send to RabbitMQ
+    rabbit.publish(body)
+    logger.info("Webhook forwarded to RabbitMQ queue 'telegram_updates'")
+
+    # Process message if exists
     message = body.get("message")
     if not message:
-        logger.info("No message found in update: %s", body)
         return TelegramWebhookResponse(ok=True, detail="No message to process")
 
     chat_id = message["chat"]["id"]
     text = message.get("text", "")
 
-    # Log what will be sent
     response_text = f"You said: {text}"
-    logger.info("Sending message to chat_id %s: %s", chat_id, response_text)
-
-    # Send message
     await send_message(chat_id, response_text)
 
-    logger.info("Message sent successfully")
     return TelegramWebhookResponse(ok=True, detail="Message processed successfully")
