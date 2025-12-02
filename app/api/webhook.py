@@ -21,10 +21,10 @@ class TelegramWebhookResponse(BaseModel):
 
 @router.post("/webhook", response_model=TelegramWebhookResponse)
 async def telegram_webhook(
-    request: Request, telegram_secret_token: Optional[str] = Header(None)
+    body: BaseModel,
+    telegram_secret_token: str = Header(convert_underscores=False),
 ):
     # Log incoming request
-    body = await request.body()
     logger.info("Incoming webhook body: %s", body.decode())
 
     # Validate secret token
@@ -37,10 +37,9 @@ async def telegram_webhook(
         )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
-    update = await request.json()
-    message = update.get("message")
+    message = body.get("message")
     if not message:
-        logger.info("No message found in update: %s", update)
+        logger.info("No message found in update: %s", body)
         return TelegramWebhookResponse(ok=True, detail="No message to process")
 
     chat_id = message["chat"]["id"]
