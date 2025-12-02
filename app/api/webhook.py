@@ -1,7 +1,8 @@
+import json
 import logging
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi import APIRouter, Body, Header, HTTPException, Request, status
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -21,7 +22,7 @@ class TelegramWebhookResponse(BaseModel):
 
 @router.post("/webhook", response_model=TelegramWebhookResponse)
 async def telegram_webhook(
-    request: Request,
+    body: dict[str, Any] = Body(...),
     telegram_secret_token: Optional[str] = Header(
         None, alias="X-Telegram-Bot-Api-Secret-Token", convert_underscores=False
     ),
@@ -36,10 +37,8 @@ async def telegram_webhook(
         )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
-    body = await request.json()
-
     # Log incoming request
-    logger.info("Incoming webhook body: %s", body)
+    logger.info("Incoming webhook body: %s", json.dumps(body))
 
     message = body.get("message")
     if not message:
