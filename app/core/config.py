@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     # RabbitMQ
     rabbitmq_host: str
     rabbitmq_port: int
-    rabbitmq_default_user: str
-    rabbitmq_default_password: str
+    rabbitmq_user: str
+    rabbitmq_password: str
     rabbitmq_queue: str
 
     class Config:

@@ -2,29 +2,7 @@ import json
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Header, HTTPException, Request, status
-from pydantic import BaseModel
-
-from app.core.config import settings
-from app.services.telegram import send_message
-
-router = APIRouter()
-
-# Configure logging
-logger = logging.getLogger("telegram_webhook")
-logger.setLevel(logging.INFO)
-
-
-class TelegramWebhookResponse(BaseModel):
-    ok: bool
-    detail: Optional[str] = None
-
-
-import json
-import logging
-from typing import Any, Optional
-
-from fastapi import APIRouter, Body, Header, HTTPException
+from fastapi import APIRouter, Body, Header, HTTPException, status
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -33,6 +11,7 @@ from app.services.telegram import send_message
 
 router = APIRouter()
 
+# Configure logging
 logger = logging.getLogger("telegram_webhook")
 logger.setLevel(logging.INFO)
 
