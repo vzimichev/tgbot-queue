@@ -3,25 +3,14 @@
 
 # Virtual environments
 .venv/
-env/
-venv/
+
+# Local environment files
+.env
 
 # Python cache
 __pycache__/
 */__pycache__/
 *.py[cod]
 
-# Distribution / packaging
-build/
-dist/
-*.egg-info/
-
 # MacOS files
 *.DS_Store
-
-# Logs
-*.log
-
-# Docker
-*.env
-docker-compose.override.yml
