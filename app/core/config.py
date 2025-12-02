@@ -9,11 +9,11 @@ class Settings(BaseSettings):
     webhook_secret_token: Optional[str] = None
 
     # RabbitMQ
-    rabbitmq_host: str = "rabbitmq"
-    rabbitmq_port: int = 5672
-    rabbitmq_user: str = "guest"
-    rabbitmq_password: str = "guest"
-    rabbitmq_queue: str = "telegram_updates"
+    rabbitmq_host: str
+    rabbitmq_port: int
+    rabbitmq_default_user: str
+    rabbitmq_default_password: str
+    rabbitmq_queue: str
 
     class Config:
         env_file = ".env"
