@@ -1,7 +1,7 @@
 import logging
-from typing import Optional
+from typing import Optional, Any
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi import APIRouter, Header, HTTPException, Request, status, Body
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -21,11 +21,11 @@ class TelegramWebhookResponse(BaseModel):
 
 @router.post("/webhook", response_model=TelegramWebhookResponse)
 async def telegram_webhook(
-    body: BaseModel,
+    body: dict[str, Any] = Body(...),
     telegram_secret_token: str = Header(convert_underscores=False),
 ):
     # Log incoming request
-    logger.info("Incoming webhook body: %s", body.decode())
+    logger.info("Incoming webhook body: %s", body)
 
     # Validate secret token
     if (
