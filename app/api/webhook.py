@@ -13,15 +13,6 @@ router = APIRouter()
 logger = logging.getLogger("telegram_webhook")
 logger.setLevel(logging.INFO)
 
-handler = logging.StreamHandler()
-handler.setFormatter(
-    logging.Formatter(
-        "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-)
-logger.addHandler(handler)
-
 
 class TelegramWebhookResponse(BaseModel):
     ok: bool
