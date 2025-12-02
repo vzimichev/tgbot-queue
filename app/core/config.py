@@ -1,9 +1,11 @@
+from typing import Optional
+
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     telegram_token: str
-    webhook_secret_token: str | None = None  # опционально
+    webhook_secret_token: Optional[str] = None
 
     class Config:
         env_file = ".env"

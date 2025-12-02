@@ -11,7 +11,16 @@ router = APIRouter()
 
 # Configure logging
 logger = logging.getLogger("telegram_webhook")
-logging.basicConfig(level=logging.INFO)
+logger.setLevel(logging.INFO)
+
+handler = logging.StreamHandler()
+handler.setFormatter(
+    logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+)
+logger.addHandler(handler)
 
 
 class TelegramWebhookResponse(BaseModel):
@@ -22,9 +31,7 @@ class TelegramWebhookResponse(BaseModel):
 @router.post("/webhook", response_model=TelegramWebhookResponse)
 async def telegram_webhook(
     request: Request,
-    telegram_secret_token: Optional[str] | None = Header(
-        None, convert_underscores=False
-    ),
+    telegram_secret_token: Optional[str] = Header(None, convert_underscores=False),
 ):
     # Validate secret token
     if (
