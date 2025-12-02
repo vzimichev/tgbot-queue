@@ -1,29 +1,58 @@
-from fastapi import APIRouter, Request, Header
-from app.services.telegram import send_message
+import logging
+from typing import Optional
+
+from fastapi import APIRouter, Header, HTTPException, Request, status
+from pydantic import BaseModel
+
 from app.core.config import settings
+from app.services.telegram import send_message
 
 router = APIRouter()
 
+# Configure logging
+logger = logging.getLogger("telegram_webhook")
+logging.basicConfig(level=logging.INFO)
 
-@router.post("/webhook")
+
+class TelegramWebhookResponse(BaseModel):
+    ok: bool
+    detail: Optional[str] = None
+
+
+@router.post("/webhook", response_model=TelegramWebhookResponse)
 async def telegram_webhook(
-    request: Request,
-    telegram_secret_token: str | None = Header(None)
+    request: Request, telegram_secret_token: Optional[str] = Header(None)
 ):
-    if settings.webhook_secret_token and \
-       telegram_secret_token != settings.webhook_secret_token:
-        return {"status": "forbidden"}
+    # Log incoming request
+    body = await request.body()
+    logger.info("Incoming webhook body: %s", body.decode())
+
+    # Validate secret token
+    if (
+        settings.webhook_secret_token
+        and telegram_secret_token != settings.webhook_secret_token
+    ):
+        logger.warning(
+            "Forbidden request with invalid secret token: %s", telegram_secret_token
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
     update = await request.json()
-
     message = update.get("message")
     if not message:
-        return {"ok": True}
+        logger.info("No message found in update: %s", update)
+        return TelegramWebhookResponse(ok=True, detail="No message to process")
 
     chat_id = message["chat"]["id"]
     text = message.get("text", "")
 
-    # sample answer
-    await send_message(chat_id, f"You said: {text}")
+    # Log what will be sent
+    response_text = f"You said: {text}"
+    logger.info("Sending message to chat_id %s: %s", chat_id, response_text)
 
-    return {"ok": True}
+    # Send message
+    await send_message(chat_id, response_text)
+
+    logger.info("Message sent successfully")
+
+    return TelegramWebhookResponse(ok=True, detail="Message processed successfully")

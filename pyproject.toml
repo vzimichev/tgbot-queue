@@ -16,3 +16,7 @@ pydantic-settings = "^2.3.0"
 
 [tool.poetry]
 package-mode = false
+
+[tool.poetry.dev-dependencies]
+isort = "^7.0.0"
+black = "^25.11.0"
