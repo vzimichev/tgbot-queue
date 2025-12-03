@@ -11,10 +11,13 @@ logger = logging.getLogger("worker")
 def process_telegram_task(body: dict):
     logger.info("Received task: %s", json.dumps(body, ensure_ascii=False))
 
-    text = body.get("message", {}).get("text", "<no text>")
+    message = body.get("message", {})
+    text = message.get("text", "<no text>")
+    chat_id = message.get("chat", {}).get("id")
+
     response = f"Rabbit answered: {text}"
 
-    send_message(chat_id=body.get("chat_id"), text=response)
+    send_message(chat_id=chat_id, text=response)
 
     logger.info("Task processed with response: %s", response)
     return response
