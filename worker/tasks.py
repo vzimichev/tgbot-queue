@@ -8,7 +8,7 @@ logger = logging.getLogger("worker")
 
 
 @celery_app.task(bind=True, name="process_telegram_task")
-def process_telegram_task(message: dict):
+def process_telegram_task(self, message: dict):
     logger.info("Received task: %s", json.dumps(message, ensure_ascii=False))
 
     text = message.get("message", {}).get("text", "<no text>")
