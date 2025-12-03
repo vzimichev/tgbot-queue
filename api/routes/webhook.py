@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from core.config import settings
 from worker.tasks import process_telegram_task
 
-router = APIRouter()
+webhook_router = APIRouter()
 logger = logging.getLogger("telegram_webhook")
 
 
@@ -17,7 +17,7 @@ class TelegramWebhookResponse(BaseModel):
     detail: Optional[str] = None
 
 
-@router.post("/webhook", response_model=TelegramWebhookResponse)
+@webhook_router.post("/webhook", response_model=TelegramWebhookResponse)
 async def telegram_webhook(
     body: dict[str, Any] = Body(...),
     telegram_secret_token: Optional[str] = Header(
@@ -25,8 +25,13 @@ async def telegram_webhook(
     ),
 ):
     # Validate secret token
-    if settings.webhook_secret_token and telegram_secret_token != settings.webhook_secret_token:
-        logger.warning("Forbidden request with invalid secret token: %s", telegram_secret_token)
+    if (
+        settings.webhook_secret_token
+        and telegram_secret_token != settings.webhook_secret_token
+    ):
+        logger.warning(
+            "Forbidden request with invalid secret token: %s", telegram_secret_token
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
     # Log incoming request
