@@ -5,11 +5,11 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, Header, HTTPException, status
 from pydantic import BaseModel
 
-from app.core.config import settings
-from app.services.rabbitmq import rabbit
-from app.services.telegram import send_message
+from core.config import settings
+from services.rabbitmq import rabbit
+from services.telegram import send_message
 
-router = APIRouter()
+webhook_router = APIRouter()
 
 # Configure logging
 logger = logging.getLogger("telegram_webhook")
@@ -21,7 +21,7 @@ class TelegramWebhookResponse(BaseModel):
     detail: Optional[str] = None
 
 
-@router.post("/webhook", response_model=TelegramWebhookResponse)
+@webhook_router.post("/webhook", response_model=TelegramWebhookResponse)
 async def telegram_webhook(
     body: dict[str, Any] = Body(...),
     telegram_secret_token: Optional[str] = Header(

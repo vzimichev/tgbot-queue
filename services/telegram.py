@@ -1,6 +1,6 @@
 import httpx
 
-from app.core.config import settings
+from core.config import settings
 
 TELEGRAM_API = f"https://api.telegram.org/bot{settings.telegram_token}"
 

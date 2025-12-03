@@ -4,8 +4,7 @@ import logging
 import pika
 from pika.exceptions import AMQPConnectionError, StreamLostError
 
-from app.core.config import settings
-
+from core.config import settings
 
 logger = logging.getLogger("rabbitmq")
 
@@ -19,8 +18,11 @@ class RabbitMQClient:
     def _connect(self):
         """Create or restore a connection."""
         try:
-            logger.info("Connecting to RabbitMQ at %s:%s ...",
-                        settings.rabbitmq_host, settings.rabbitmq_port)
+            logger.info(
+                "Connecting to RabbitMQ at %s:%s ...",
+                settings.rabbitmq_host,
+                settings.rabbitmq_port,
+            )
 
             self.connection = pika.BlockingConnection(
                 pika.ConnectionParameters(
@@ -35,13 +37,11 @@ class RabbitMQClient:
                 )
             )
             self.channel = self.connection.channel()
-            self.channel.queue_declare(
-                queue=settings.rabbitmq_queue,
-                durable=True
-            )
+            self.channel.queue_declare(queue=settings.rabbitmq_queue, durable=True)
 
-            logger.info("Connected to RabbitMQ and queue declared: %s",
-                        settings.rabbitmq_queue)
+            logger.info(
+                "Connected to RabbitMQ and queue declared: %s", settings.rabbitmq_queue
+            )
 
         except AMQPConnectionError as e:
             logger.error("RabbitMQ connection failed: %s", e)
@@ -74,8 +74,9 @@ class RabbitMQClient:
                 body=json.dumps(message).encode(),
                 properties=pika.BasicProperties(delivery_mode=2),
             )
-            logger.debug("Published message to RabbitMQ queue '%s'",
-                         settings.rabbitmq_queue)
+            logger.debug(
+                "Published message to RabbitMQ queue '%s'", settings.rabbitmq_queue
+            )
 
         except (AMQPConnectionError, StreamLostError) as e:
             logger.warning("Lost connection while publishing: %s", e)
