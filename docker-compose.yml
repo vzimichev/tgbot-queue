@@ -14,7 +14,7 @@ services:
     image: rabbitmq:3.13-management
     container_name: rabbitmq
     restart: unless-stopped
-    mem_limit: 512m
+    mem_limit: 1g
     ports:
       - "5672:5672"
       - "15672:15672"
