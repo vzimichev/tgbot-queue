@@ -14,6 +14,7 @@ services:
     image: rabbitmq:3.13-management
     container_name: rabbitmq
     restart: unless-stopped
+    mem_limit: 512m
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -22,6 +23,7 @@ services:
     environment:
       - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER}
       - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}
+      - RABBITMQ_VM_MEMORY_HIGH_WATERMARK="0.7"
     healthcheck:
       test: ["CMD", "rabbitmqctl", "status"]
       interval: 5s
