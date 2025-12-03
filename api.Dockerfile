@@ -32,4 +32,4 @@ COPY . /app
 EXPOSE 8000
 
 # Start the API using Uvicorn
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

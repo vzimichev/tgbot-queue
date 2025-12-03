@@ -1,6 +1,8 @@
 services:
   telegram_gateway:
-    build: .
+    build:
+      context: .
+      dockerfile: api.Dockerfile
     container_name: telegram_gateway
     restart: unless-stopped
     env_file: .env
