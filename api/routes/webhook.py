@@ -6,14 +6,10 @@ from fastapi import APIRouter, Body, Header, HTTPException, status
 from pydantic import BaseModel
 
 from core.config import settings
-from services.rabbitmq import rabbit
-from services.telegram import send_message
+from worker.tasks import process_telegram_task
 
-webhook_router = APIRouter()
-
-# Configure logging
+router = APIRouter()
 logger = logging.getLogger("telegram_webhook")
-logger.setLevel(logging.INFO)
 
 
 class TelegramWebhookResponse(BaseModel):
@@ -21,7 +17,7 @@ class TelegramWebhookResponse(BaseModel):
     detail: Optional[str] = None
 
 
-@webhook_router.post("/webhook", response_model=TelegramWebhookResponse)
+@router.post("/webhook", response_model=TelegramWebhookResponse)
 async def telegram_webhook(
     body: dict[str, Any] = Body(...),
     telegram_secret_token: Optional[str] = Header(
@@ -29,31 +25,16 @@ async def telegram_webhook(
     ),
 ):
     # Validate secret token
-    if (
-        settings.webhook_secret_token
-        and telegram_secret_token != settings.webhook_secret_token
-    ):
-        logger.warning(
-            "Forbidden request with invalid secret token: %s", telegram_secret_token
-        )
+    if settings.webhook_secret_token and telegram_secret_token != settings.webhook_secret_token:
+        logger.warning("Forbidden request with invalid secret token: %s", telegram_secret_token)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
-    # Log
-    logger.info("Incoming webhook body: %s", json.dumps(body, ensure_ascii=False))
+    # Log incoming request
+    logger.info("Incoming webhook body: %s", json.dumps(body))
 
-    # Send to RabbitMQ
-    rabbit.publish(body)
-    logger.info("Webhook forwarded to RabbitMQ queue 'telegram_updates'")
+    # Send the JSON to Celery
+    process_telegram_task.delay(body)
 
-    # Process message if exists
-    message = body.get("message")
-    if not message:
-        return TelegramWebhookResponse(ok=True, detail="No message to process")
+    logger.info("Task sent to Celery")
 
-    chat_id = message["chat"]["id"]
-    text = message.get("text", "")
-
-    response_text = f"You said: {text}"
-    await send_message(chat_id, response_text)
-
-    return TelegramWebhookResponse(ok=True, detail="Message processed successfully")
+    return TelegramWebhookResponse(ok=True, detail="Message queued for processing")

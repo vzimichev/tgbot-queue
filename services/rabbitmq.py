@@ -1,5 +1,6 @@
 import json
 import logging
+from typing import Optional
 
 import pika
 from pika.exceptions import AMQPConnectionError, StreamLostError
