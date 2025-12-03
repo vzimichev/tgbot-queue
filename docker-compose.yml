@@ -14,6 +14,7 @@ services:
     image: rabbitmq:3.13-management
     container_name: rabbitmq
     restart: unless-stopped
+    mem_limit: 1g
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -29,6 +30,7 @@ services:
       retries: 5
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
 
 volumes:
   rabbitmq_data:
