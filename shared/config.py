@@ -8,11 +8,10 @@ class Settings(BaseSettings):
     telegram_token: str
     webhook_secret_token: Optional[str] = None
 
-    # RabbitMQ
-    rabbitmq_host: str
-    rabbitmq_port: int
-    rabbitmq_user: str
-    rabbitmq_password: str
+    # Redis
+    redis_host: str
+    redis_port: int
+    redis_password: str
 
     class Config:
         env_file = ".env"
