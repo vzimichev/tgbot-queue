@@ -1,6 +1,6 @@
 from celery import Celery
 
-from core.config import settings
+from shared.config import settings
 
 celery_app = Celery(
     "worker",

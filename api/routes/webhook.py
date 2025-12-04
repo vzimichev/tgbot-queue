@@ -5,7 +5,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, Header, HTTPException, status
 from pydantic import BaseModel
 
-from core.config import settings
+from shared.config import settings
 from worker.tasks import process_telegram_task
 
 webhook_router = APIRouter()
