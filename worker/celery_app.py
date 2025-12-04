@@ -4,8 +4,8 @@ from shared.config import settings
 
 celery_app = Celery(
     "worker",
-    broker=f"amqp://{settings.rabbitmq_user}:{settings.rabbitmq_password}@{settings.rabbitmq_host}:{settings.rabbitmq_port}/",
-    backend=None,
+    broker=f"redis://{settings.redis_host}:{settings.redis_port}/1",
+    backend=f"redis://{settings.redis_host}:{settings.redis_port}/2",
 )
 
 celery_app.conf.task_acks_late = True
