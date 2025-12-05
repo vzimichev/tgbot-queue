@@ -39,15 +39,12 @@ poetry install
 Create a `.env` file in the project root:
 
 ```env
-TELEGRAM_TOKEN=123456:ABC-DEF123
-WEBHOOK_SECRET_TOKEN=super-secret
+REDIS_URL=redis://:<password>@<host>:6379/0
 
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_PASSWORD=guest1
+TELEGRAM_BOT_TOKEN=<your_bot_token>
 ```
 
-All environment variables are loaded via `shared/config.py`.
+All environment variables are loaded via `core/config.py`.
 
 ## Running the Gateway (FastAPI)
 
@@ -55,7 +52,7 @@ All environment variables are loaded via `shared/config.py`.
 uvicorn api.main:app --host 0.0.0.0 --port 8000
 ```
 
-- Webhook endpoint: `/webhook`
+- Webhook endpoint: `/webhook/telegram`
 - Accepts standard Telegram update JSON
 
 ## Running Celery Worker
@@ -83,6 +80,9 @@ Telegram → FastAPI Webhook → Celery Task → Redis Queue → Worker → Tele
 
 - **Worker** (`worker/celery_app.py`)  
   Configures Celery and runs message-processing logic.
+
+- **Telegram Client** (`core/telegram_client.py`)  
+  A lightweight wrapper around the Telegram Bot API.
 
 ## Example Task Payload
 
