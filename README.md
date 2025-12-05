@@ -1,28 +1,32 @@
-# Telegram Gateway
+# Telegram Processing Gateway
 
-FastAPI gateway for handling Telegram webhooks and processing them asynchronously via Celery.
+A FastAPI-based gateway for receiving Telegram webhooks and delegating message processing to background workers using Celery with Redis as the broker.
 
 ## Features
 
-- Receives Telegram updates via webhooks.
-- Sends tasks to RabbitMQ.
-- Processes tasks asynchronously with Celery workers.
-- Replies to Telegram messages automatically.
+- Receives Telegram updates via a webhook endpoint.
+- Publishes processing tasks to Redis (Celery broker).
+- Handles messages asynchronously via Celery workers.
+- Provides clean architectural separation:
+  - **Gateway layer** — HTTP intake from Telegram.
+  - **Task layer** — publishes jobs to the queue.
+  - **Worker layer** — business logic of processing messages.
+  - **Telegram client layer** — sends replies back via Bot API.
 
 ## Requirements
 
 - Python 3.13+
-- RabbitMQ server
-- Telegram Bot token
+- Redis server
+- Telegram Bot Token
 
 ## Installation
 
 ```bash
-# Clone repo
+# Clone repository
 git clone <repo_url>
 cd tgbot-queue
 
-# Setup virtual environment
+# Create virtual environment
 python -m venv .venv
 source .venv/bin/activate
 
@@ -35,24 +39,21 @@ poetry install
 Create a `.env` file in the project root:
 
 ```env
-RABBITMQ_USER=<user>
-RABBITMQ_PASSWORD=<password>
-RABBITMQ_HOST=<host>
-RABBITMQ_PORT=5672
+REDIS_URL=redis://:<password>@<host>:6379/0
 
 TELEGRAM_BOT_TOKEN=<your_bot_token>
 ```
 
-The project uses `core/config.py` to load settings from environment variables.
+All environment variables are loaded via `core/config.py`.
 
-## Running FastAPI
+## Running the Gateway (FastAPI)
 
 ```bash
-api.main:app --host 0.0.0.0 --port 8000
+uvicorn api.main:app --host 0.0.0.0 --port 8000
 ```
 
-- Webhook endpoint: `/webhook/telegram`  
-- Expects Telegram updates in JSON format.
+- Webhook endpoint: `/webhook/telegram`
+- Accepts standard Telegram update JSON
 
 ## Running Celery Worker
 
@@ -60,18 +61,30 @@ api.main:app --host 0.0.0.0 --port 8000
 celery -A worker.celery_app.celery_app worker --loglevel=info
 ```
 
-- The worker consumes tasks from RabbitMQ.
-- Tasks are defined in `worker/tasks.py`.
+- Tasks are dispatched by the gateway.
+- Workers consume tasks from Redis and execute message-processing logic.
 
-## Telegram Message Processing
-
-Tasks take the Telegram update JSON and reply with:
+## Architecture Overview
 
 ```
-Rabbit answered: <original message text>
+Telegram → FastAPI Webhook → Celery Task → Redis Queue → Worker → Telegram Bot API
 ```
 
-**Example JSON structure for tasks:**
+### Layers
+
+- **Gateway** (`api/`)  
+  Validates and accepts Telegram updates.
+
+- **Tasks** (`worker/tasks.py`)  
+  Defines background tasks for processing incoming updates.
+
+- **Worker** (`worker/celery_app.py`)  
+  Configures Celery and runs message-processing logic.
+
+- **Telegram Client** (`core/telegram_client.py`)  
+  A lightweight wrapper around the Telegram Bot API.
+
+## Example Task Payload
 
 ```json
 {
@@ -84,3 +97,13 @@ Rabbit answered: <original message text>
   }
 }
 ```
+
+## Default Worker Behavior
+
+For now, the worker replies with:
+
+```
+Worker response: <original message text>
+```
+
+You can extend the logic to handle photos, commands, multi-step dialogs, etc.
