@@ -5,8 +5,8 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from shared.config import settings
-from worker.celery_app import celery_app
-from worker.models.telegram import Update
+from worker.main import celery_app
+from aiogram.types import Update
 from worker.services.telegram import TelegramClient
 
 logger = logging.getLogger("worker")

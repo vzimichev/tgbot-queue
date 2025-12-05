@@ -3,8 +3,7 @@ import os
 from typing import Any, Dict, Optional
 
 import httpx
-
-from worker.models.telegram import Message
+from aiogram.types import Message
 
 
 class TelegramClient:
