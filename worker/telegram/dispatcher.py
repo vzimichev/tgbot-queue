@@ -1,6 +1,6 @@
 from aiogram import Dispatcher
 
-from worker.telegram.routes import common_router
+from worker.telegram.routes import router
 
 dp = Dispatcher()
-dp.include_router(common_router)
+dp.include_router(router)
