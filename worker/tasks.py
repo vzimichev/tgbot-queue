@@ -1,36 +1,48 @@
+import asyncio
 import json
 import logging
-from pathlib import Path
 
-from pydantic import ValidationError
+import httpx
+from aiogram.types import Update
 
-from shared.config import settings
-from worker.celery_app import celery_app
-from worker.models.telegram import Update
-from worker.services.telegram import TelegramClient
+from worker.main import celery_app
+from worker.telegram.bot import bot
+from worker.telegram.dispatcher import dp
 
 logger = logging.getLogger("worker")
-telegram = TelegramClient(settings.telegram_token)
-cache_folder = Path(__file__).parent / ".cache"
 
 
 @celery_app.task
 def process_telegram_task(body: dict) -> None:
     logger.info("Received task: %s", json.dumps(body, ensure_ascii=False))
+    update = Update(**body)
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(dp.feed_update(bot=bot, update=update))
+
+
+@celery_app.task
+def process_face_swap_task(photo_path: str, video_path: str) -> dict:
+    url = "https://example.com/api/generate"
+
+    payload = {
+        "photo_path": photo_path,
+        "video_path": video_path,
+    }
+
+    logger.info(
+        f"Sending generation request: {json.dumps(payload, ensure_ascii=False)}"
+    )
 
     try:
-        update = Update(**body)
-    except ValidationError as e:
-        logger.error(e)
-        return
+        with httpx.Client(timeout=20.0) as client:
+            response = client.post(url, json=payload)
 
-    msg = update.message
-    chat_id = msg.chat.id
-    tmp_folder = f"{msg.date}-{msg.media_group_id}"
+        response.raise_for_status()
 
-    file_paths = telegram.download_all_files(
-        message=msg, dest_dir=f"{cache_folder}/{tmp_folder}"
-    )
-    telegram.send_message(
-        chat_id=chat_id, text=f"{len(file_paths)} file(s) downloaded."
-    )
+        logger.info(f"Success response: {response.text}")
+        return response.json()
+
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error: {e}")
+        return {"error": str(e), "success": False}
