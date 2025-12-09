@@ -1,6 +1,5 @@
-from typing import Optional
-
-from pydantic_settings import BaseSettings
+from pydantic import BaseSettings
+from typing import Optional, Literal
 
 
 class Settings(BaseSettings):
@@ -9,12 +8,17 @@ class Settings(BaseSettings):
     webhook_secret_token: Optional[str] = None
 
     # Redis
-    redis_host: str
-    redis_port: int
-    redis_password: str
+    redis_host: str = "redis"
+    redis_port: int = 6379
+    redis_password: Optional[str] = None
+
+    # Processor provider
+    processor_type: Literal["facefusion", "remote", "dummy"] = "facefusion"
+    processor_url: Optional[str] = None
 
     class Config:
         env_file = ".env"
+        env_file_encoding = "utf-8"
 
 
 settings = Settings()
