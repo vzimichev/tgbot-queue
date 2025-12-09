@@ -5,7 +5,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Document, Message
 
-from worker.tasks import process_face_swap_task
+from worker import tasks
 from worker.telegram.bot import bot
 from worker.telegram.states import UploadMediaState
 
@@ -15,7 +15,7 @@ router = Router()
 
 @router.message(Command("start"))
 async def start(msg: Message, state: FSMContext):
-    await msg.answer("Send a photo as a *document* (not compressed).")
+    await msg.answer("Send a photo as a document (not compressed).")
     await state.set_state(UploadMediaState.waiting_photo)
 
 
@@ -24,7 +24,7 @@ async def receive_photo(msg: Message, state: FSMContext):
     path = await save_document(msg.document)
     await state.update_data(photo_path=str(path))
 
-    await msg.answer("Photo received.\nNow send a *video* as a document.")
+    await msg.answer("Photo received.\nNow send a video as a document.")
     await state.set_state(UploadMediaState.waiting_video)
 
 
@@ -54,7 +54,7 @@ async def generate(msg: Message, state: FSMContext):
     photo = data.get("photo_path")
     video = data.get("video_path")
 
-    process_face_swap_task.delay(photo, video)
+    tasks.process_face_swap_task.delay(photo, video)
 
     await msg.answer("Generation scheduled...")
     await state.clear()
