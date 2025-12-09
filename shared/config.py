@@ -1,5 +1,6 @@
-from pydantic import BaseSettings
-from typing import Optional, Literal
+from typing import Optional
+
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -11,10 +12,6 @@ class Settings(BaseSettings):
     redis_host: str = "redis"
     redis_port: int = 6379
     redis_password: Optional[str] = None
-
-    # Processor provider
-    processor_type: Literal["facefusion", "remote", "dummy"] = "facefusion"
-    processor_url: Optional[str] = None
 
     class Config:
         env_file = ".env"

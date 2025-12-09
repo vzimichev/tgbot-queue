@@ -6,7 +6,7 @@ from fastapi import APIRouter, Body, Header, HTTPException, status
 from pydantic import BaseModel
 
 from shared.config import settings
-from worker.tasks import process_telegram_task
+from worker.celery_tasks import process_telegram_task_
 
 webhook_router = APIRouter()
 logger = logging.getLogger("telegram_webhook")

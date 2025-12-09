@@ -5,9 +5,9 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Document, Message
 
-import worker.processors.faceswap.celery_tasks
-from worker.telegram.bot import bot
-from worker.telegram.states import UploadMediaState
+import bot_factories.faceswap_bot.celery_tasks
+from worker.bot import bot
+from worker.processors.faceswap.states import UploadMediaState
 
 cache_folder = Path(__file__).parent.parent / ".cache"
 face_swap_router = Router()
@@ -87,7 +87,7 @@ async def generate(msg: Message, state: FSMContext):
     photo = data.get("photo_path")
     video = data.get("video_path")
 
-    worker.processors.faceswap.celery_tasks.process_face_fusion_task.delay(photo, video)
+    bot_factories.faceswap.celery_tasks.process_face_fusion_task.delay(photo, video)
 
     await msg.answer("Generation scheduled...")
     await state.clear()
