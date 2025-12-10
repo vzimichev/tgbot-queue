@@ -6,14 +6,13 @@ from aiogram.enums import ParseMode
 from celery import Celery
 
 from shared.config import settings
-from worker.tasks import register_default_telegram_task
+from worker.celery_tasks import register_default_telegram_task
 
 
 class CeleryFactory:
     @staticmethod
     def create_app(
         router: Optional[Router] = None,
-        # extra_task_modules: Optional[list[str]] = None,
     ) -> Celery:
         celery_app = Celery(
             "worker",
@@ -29,24 +28,16 @@ class CeleryFactory:
         celery_app.conf.broker_heartbeat = 30
         celery_app.conf.broker_connection_retry_on_startup = True
 
-        # modules = ["worker.celery_tasks"]
-        # if extra_task_modules:
-        #     modules.extend(extra_task_modules)
-        #
-        # celery_app.autodiscover_tasks(modules)
-
         bot = Bot(
             token=settings.telegram_token,
             default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
         )
 
-        celery_app.bot = bot
-
         dp = Dispatcher(bot=bot)
-
         if router:
             dp.include_router(router)
 
+        celery_app.bot = bot
         celery_app.dp = dp
 
         register_default_telegram_task(celery_app)

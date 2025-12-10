@@ -1,17 +1,3 @@
-from pathlib import Path
-
-from aiogram import F, Router
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.types import Document, Message
-
-import bot_factories.faceswap_bot.celery_tasks
-from worker.bot import bot
-from worker.processors.faceswap.states import UploadMediaState
-
-cache_folder = Path(__file__).parent.parent / ".cache"
-face_swap_router = Router()
-
 """
 Face Swap Router (Example Implementation)
 
@@ -45,66 +31,97 @@ Note:
   and asynchronous task scheduling.
 """
 
+from pathlib import Path
 
-@face_swap_router.message(Command("start"))
+from aiogram import F, Router
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import Message
+
+from bot_factories.faceswap_bot.repository import (process_face_fusion_task,
+                                                   save_document)
+
+faceswap_router = Router()
+
+
+class UploadMediaState(StatesGroup):
+    waiting_photo = State()
+    waiting_video = State()
+    ready_to_generate = State()
+
+
+@faceswap_router.message(Command("start"))
 async def start(msg: Message, state: FSMContext):
     await msg.answer("Send a photo as a document (not compressed).")
     await state.set_state(UploadMediaState.waiting_photo)
 
 
-@face_swap_router.message(UploadMediaState.waiting_photo, F.document)
+@faceswap_router.message(UploadMediaState.waiting_photo, F.document)
 async def receive_photo(msg: Message, state: FSMContext):
-    path = await save_document(msg.document)
-    await state.update_data(photo_path=str(path))
+    await state.update_data(
+        photo_file_id=msg.document.file_id, photo_file_name=msg.document.file_name
+    )
 
     await msg.answer("Photo received.\nNow send a video as a document.")
     await state.set_state(UploadMediaState.waiting_video)
 
 
-@face_swap_router.message(UploadMediaState.waiting_photo)
+@faceswap_router.message(UploadMediaState.waiting_photo)
 async def wrong_photo(msg: Message):
     await msg.answer("Please send a photo as document. No images/stickers/etc.")
 
 
-@face_swap_router.message(UploadMediaState.waiting_video, F.document)
+@faceswap_router.message(UploadMediaState.waiting_video, F.document)
 async def receive_video(msg: Message, state: FSMContext):
-    path = await save_document(msg.document)
-    await state.update_data(video_path=str(path))
+    await state.update_data(
+        video_file_id=msg.document.file_id, video_file_name=msg.document.file_name
+    )
 
     await msg.answer("Video received.\nSend /generate to produce the result.")
     await state.set_state(UploadMediaState.ready_to_generate)
 
 
-@face_swap_router.message(UploadMediaState.waiting_video)
+@faceswap_router.message(UploadMediaState.waiting_video)
 async def wrong_video(msg: Message):
     await msg.answer("Please send a video as document.")
 
 
-@face_swap_router.message(UploadMediaState.ready_to_generate, Command("generate"))
+@faceswap_router.message(UploadMediaState.ready_to_generate, Command("generate"))
 async def generate(msg: Message, state: FSMContext):
     data = await state.get_data()
 
-    photo = data.get("photo_path")
-    video = data.get("video_path")
+    photo_file_id = data["photo_file_id"]
+    photo_file_name = data["photo_file_name"]
+    photo_path = await save_document(
+        bot=msg.bot,
+        file_id=photo_file_id,
+        file_name=photo_file_name,
+    )
+    await msg.answer("Photo downloaded")
 
-    bot_factories.faceswap.celery_tasks.process_face_fusion_task.delay(photo, video)
+    video_file_id = data["video_file_id"]
+    video_file_name = data["video_file_name"]
+    video_path = await save_document(
+        bot=msg.bot,
+        file_id=video_file_id,
+        file_name=video_file_name,
+    )
+    await msg.answer("Video downloaded")
 
-    await msg.answer("Generation scheduled...")
+    await msg.answer("Generation started...")
+    await process_face_fusion_task(
+        photo_path=photo_path,
+        video_path=video_path,
+    )
     await state.clear()
 
 
-@face_swap_router.message(UploadMediaState.ready_to_generate)
+@faceswap_router.message(UploadMediaState.ready_to_generate)
 async def waiting_generate(msg: Message):
     await msg.answer("Send /generate to start.")
 
 
-@face_swap_router.message()
+@faceswap_router.message()
 async def command_start_handler(msg: Message) -> None:
     await msg.answer("Press /start")
-
-
-async def save_document(doc: Document) -> Path:
-    file = await bot.get_file(doc.file_id)
-    path = cache_folder / doc.file_name
-    await bot.download_file(file.file_path, destination=path)
-    return path
