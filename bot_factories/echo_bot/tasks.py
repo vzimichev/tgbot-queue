@@ -4,7 +4,6 @@ import logging
 
 from aiogram.types import Update
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -15,5 +14,6 @@ def create_process_telegram_task(celery_app, dp):
         update = Update(**body)
         loop = asyncio.get_event_loop()
         loop.run_until_complete(dp.feed_update(update=update, bot=dp.bot))
+        return "lol"
 
     return process_telegram_task
