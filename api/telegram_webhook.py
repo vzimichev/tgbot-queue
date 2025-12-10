@@ -6,7 +6,7 @@ from fastapi import APIRouter, Body, Header, HTTPException, status
 from pydantic import BaseModel
 
 from shared.config import settings
-from worker.tasks import process_telegram_task
+from worker.celery_app import celery_app
 
 webhook_router = APIRouter()
 logger = logging.getLogger("telegram_webhook")
@@ -38,7 +38,7 @@ async def telegram_webhook(
     logger.info("Incoming webhook body: %s", json.dumps(body))
 
     # Send the JSON to Celery
-    process_telegram_task.delay(body)
+    celery_app.send_task("process_telegram_task", args=[body])
 
     logger.info("Task sent to Celery")
 
