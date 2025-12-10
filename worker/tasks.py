@@ -16,9 +16,10 @@ def register_default_telegram_task(celery_app):
         update = Update(**body)
 
         dp = celery_app.dp
+        bot = celery_app.bot
 
         loop = asyncio.get_event_loop()
-        loop.run_until_complete(dp.feed_update(bot=dp.bot, update=update))
+        loop.run_until_complete(dp.feed_update(bot=bot, update=update))
 
         return {"status": "ok"}
 

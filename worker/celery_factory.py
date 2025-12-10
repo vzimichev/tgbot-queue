@@ -5,6 +5,7 @@ from celery import Celery
 
 from shared.config import settings
 from worker.tasks import register_default_telegram_task
+from worker.telegram_client import bot
 
 
 class CeleryFactory:
@@ -39,9 +40,8 @@ class CeleryFactory:
             dp.include_router(router)
 
         celery_app.dp = dp
+        celery_app.bot = bot
 
         register_default_telegram_task(celery_app)
-
-        return celery_app
 
         return celery_app
