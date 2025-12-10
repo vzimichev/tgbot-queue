@@ -1,3 +1,5 @@
+from typing import Optional
+
 from aiogram import Dispatcher, Router
 from celery import Celery
 
@@ -8,8 +10,8 @@ from worker.tasks import register_default_telegram_task
 class CeleryFactory:
     @staticmethod
     def create_app(
-        router: Router,
-        # extra_task_modules: list[str] | None = None,
+        router: Optional[Router] = None,
+        # extra_task_modules: Optional[list[str]] = None,
     ) -> Celery:
         celery_app = Celery(
             "worker",
@@ -32,7 +34,9 @@ class CeleryFactory:
         # celery_app.autodiscover_tasks(modules)
 
         dp = Dispatcher()
-        dp.include_router(router)
+
+        if router:
+            dp.include_router(router)
 
         celery_app.dp = dp
 
