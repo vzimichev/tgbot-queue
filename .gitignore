@@ -15,4 +15,4 @@ __pycache__/
 # MacOS files
 *.DS_Store
 
-**/.cache/
+**/.cache/*

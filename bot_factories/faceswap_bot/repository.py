@@ -38,7 +38,10 @@ async def process_face_fusion_task(photo_path: Path, video_path: Path) -> dict:
 
 
 async def save_document(bot: Bot, file_id: str, file_name: str) -> Path:
+    folder = cache_folder / str(bot.id)
+    folder.mkdir(parents=True, exist_ok=True)
+
     file = await bot.get_file(file_id)
-    path = cache_folder / file_name
+    path = folder / str(file_name)
     await bot.download_file(file.file_path, destination=path)
     return path
