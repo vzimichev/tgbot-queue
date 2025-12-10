@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from api.routes.webhook import webhook_router
+from api.telegram_webhook import webhook_router
 from shared.logger import setup_logging
 
 setup_logging()
