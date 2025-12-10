@@ -1,163 +1,139 @@
 # Telegram Processing Gateway
 
-A **FastAPI-based gateway** for receiving Telegram webhooks and delegating message processing to background workers.
-Workers can run **locally or remotely**, allowing heavy processing (like AI image/video generation) without overloading the cloud instance.
+A lightweight **FastAPI + Celery** gateway for building Telegram bots that rely on **heavy local processing**—AI image/video generation, audio transcription, face-swapping, large ML models, or any CPU/GPU-intensive tasks.
+
+## Why this project exists
+
+Telegram bots deployed to the cloud cannot efficiently run heavy AI pipelines.
+
+This project solves the problem with a hybrid approach:
+
+- Deploy only a **lightweight webhook gateway** to any cheap cloud VM.
+
+- Run the **heavy workers locally** (or anywhere with GPUs/CPUs).
+
+This lets you prototype AI-powered bots **locally**, with full GPU access, while keeping cloud costs minimal.
 
 ## Features
+### Core Functionality
 
-* Receives Telegram updates via a webhook endpoint.
-* Publishes processing tasks to **Redis** (Celery broker).
-* Handles messages asynchronously via **Celery workers**.
-* Supports **pluggable processing backends**:
+- **Webhook Gateway** (FastAPI) — receives Telegram updates securely.
 
-  * Local executable
-  * Remote API or service
-  * Example: FaceFusion for AI face/video processing
-* Clean architectural separation:
+- **Queue** (Redis) — decouples your cloud and local machines.
 
-  * **Gateway layer** — HTTP intake from Telegram.
-  * **Task layer** — publishes jobs to the queue.
-  * **Worker layer** — business logic for processing messages.
-  * **Processor layer** — isolated heavy processing (e.g., AI models).
-  * **Telegram client layer** — sends replies back via Bot API.
+- **Workers** (Celery) — execute heavy processing (AI/ML/audio/video/etc.).
+
+- **Bot** (Aiogram) — write simple Aiogram handlers; everything else is handled automatically.
+
+### Architecture Benefits
+
+- Local/Remote Hybrid: run GPU tasks locally, gateway in the cloud.
+
+- Fully Modular: gateway, worker, and bot logic are isolated.
+
+- Easy Experimentation: ideal for prototyping creative AI bot ideas.
+
+- Production-Friendly: keep heavy tasks off your cloud instance.
+
+## Folder Structure
+
+    /api                 – FastAPI webhook  
+    /worker              – Celery setup  
+    /bot_factory         – aiogram bots (customizable)  
+    /shared              – configs, clients  
+
+If you want to build a fully customized bot, place it inside
+`bot_factory`.\
+Bot customization is essentially about defining **aiogram routes and
+handlers**.\
+The rest of the architecture remains unchanged.
+
+### Architecture Overview:
+
+    Telegram → FastAPI → Celery Task → Redis → Worker → Aiogram Bot → Telegram API
+
+Aiogram **does not receive webhooks directly** --- it runs inside a
+Celery worker.
 
 ## Requirements
 
-* Python 3.13+
-* Redis server
-* Telegram Bot Token
-* Optional: GPU/CPU resources for heavy processors (local or remote)
-
-## Installation
-
-```bash
-# Clone repository
-git clone <repo_url>
-cd tgbot-queue
-
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies
-poetry install
-```
+- Python 3.13
+- Docker
+- Telegram Bot Token
+- Domain name (Telegram requires HTTPS for webhooks)
 
 ## Configuration
 
-Create a `.env` file in the project root:
+Create `.env` in project root:
 
-```env
-# Telegram
-TELEGRAM_TOKEN=123456:ABC-DEF123
+``` env
+TELEGRAM_TOKEN=123456:ABC
 WEBHOOK_SECRET_TOKEN=super-secret
 
-# Redis
 REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_PASSWORD=guest1
-
-# Processor configuration
-PROCESSOR_TYPE=facefusion       # e.g., "facefusion", "dummy", "custom"
-PROCESSOR_URL=http://localhost:5000  # Optional for remote API processors
-PROCESSOR_EXECUTABLE=/usr/local/bin/facefusion  # Optional for local executables
 ```
 
-All environment variables are loaded via `shared/config.py`.
+All variables are loaded via `shared/config.py`.
 
-## Running the Gateway (FastAPI)
+## Running the Cloud Gateway
 
-```bash
-uvicorn api.main:app --host 0.0.0.0 --port 8000
+Start all cloud-side services:
+``` bash
+docker compose up -d --build
 ```
 
-* Webhook endpoint: `/webhook`
-* Accepts standard Telegram update JSON
-* Publishes tasks to Redis for asynchronous processing
+This starts:
 
-## Running Celery Worker
+- **gateway**: FastAPI server receiving Telegram webhook calls
+- **redis**: Message broker
+- **flower**: Celery monitoring UI
 
-```bash
-celery -A worker.celery_app.celery_app worker --loglevel=info
+View logs:
+
+``` bash
+docker compose logs -f
 ```
 
-* Tasks are dispatched by the gateway.
-* Workers consume tasks from Redis and execute **message-processing logic**.
-* Worker logic can call local or remote processors depending on configuration.
+Stop and remove containers + volumes:
 
-## Processor Layer
-
-The processor layer is designed to be **modular and replaceable**:
-
-* **Local executable**:
-
-  ```bash
-  facefusion run -s <input_photo> -t <input_video> -o <output_path>
-  ```
-* **Remote API**:
-
-  * Any processor exposing an HTTP interface can be connected via `PROCESSOR_URL`.
-* **Dummy processor**:
-
-  * For testing, no heavy processing is required.
-
-## Architecture Overview
-
-```
-Telegram → FastAPI Webhook → Celery Task → Redis Queue → Worker → Processor (local/remote) → Telegram Bot API
+``` bash
+docker compose down -v
 ```
 
-### Layers
+## Running the Worker
 
-* **Gateway** (`api/`)
-  Validates and accepts Telegram updates.
+Run your local worker that contains the **aiogram bot handlers** and executes heavy processing:
 
-* **Tasks** (`worker/tasks.py`)
-  Defines background tasks for processing incoming updates.
+``` bash
+celery -A bot_factories.echo_bot.celery_app worker --loglevel=info
+```
+This lets you run AI-heavy tasks (audio/video processing, image generation, etc.) locally, while the cloud instance only receives webhooks.
 
-* **Worker** (`worker/celery_app.py`)
-  Configures Celery and runs message-processing logic.
+## Setting the Telegram Webhook
 
-* **Processor** (`processors/`)
-  Handles heavy processing asynchronously and in isolation.
+After the cloud gateway is online, point your bot to it:
 
-* **Telegram Client** (`shared/telegram_client.py`)
-  Sends replies and media back to Telegram via Bot API.
-
-## Example Task Payload
-
-```json
-{
-  "update_id": 123456,
-  "message": {
-    "message_id": 1,
-    "from": {"id": 111, "is_bot": false, "first_name": "Valery"},
-    "chat": {"id": 111, "type": "private"},
-    "text": "Hello"
-  }
-}
+``` bash
+curl -X POST "https://api.telegram.org/bot<token>/setWebhook" \
+  -d "url=https://your_domain/webhook" \
+  -d "secret_token=<WEBHOOK_SECRET_TOKEN>"
 ```
 
-## Default Worker Behavior
-
-For now, the worker replies with:
-
+Webhook endpoint:
 ```
-Worker response: <original message text>
+https://your-domain.com/webhook
 ```
 
-You can extend the logic to handle:
+## Custom Bots
 
-* Photos and videos
-* Multi-step dialogs
-* AI-based content processing
-* Any other custom processors
+To create a custom bot:
 
-## Contribution
-
-* Extend the `processors/` folder with new processing modules.
-* Use `PROCESSOR_TYPE` to switch between different backends.
-* Keep cloud instance light — heavy workloads should stay isolated.
+1.  Add a file inside `bot_factory/`.
+2.  Define aiogram routers and handlers.
+3.  Connect the bot in the worker if needed.
+4.  No changes required to the core architecture.
 
 ## License
 
