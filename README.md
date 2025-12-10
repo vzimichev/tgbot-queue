@@ -12,8 +12,6 @@ This project solves the problem with a hybrid approach:
 
 - Run the **heavy workers locally** (or anywhere with GPUs/CPUs).
 
-- The gateway forwards updates → Celery → Redis → local worker → Aiogram bot → Telegram API.
-
 This lets you prototype AI-powered bots **locally**, with full GPU access, while keeping cloud costs minimal.
 
 ## Features
