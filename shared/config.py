@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # Telegram
-    telegram_token: str
+    telegram_token: Optional[str] = None
     webhook_secret_token: Optional[str] = None
 
     # Redis

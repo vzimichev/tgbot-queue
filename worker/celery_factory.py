@@ -1,11 +1,12 @@
 from typing import Optional
 
-from aiogram import Dispatcher, Router
+from aiogram import Bot, Dispatcher, Router
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from celery import Celery
 
 from shared.config import settings
 from worker.tasks import register_default_telegram_task
-from worker.telegram_client import bot
 
 
 class CeleryFactory:
@@ -34,13 +35,19 @@ class CeleryFactory:
         #
         # celery_app.autodiscover_tasks(modules)
 
-        dp = Dispatcher()
+        bot = Bot(
+            token=settings.telegram_token,
+            default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
+        )
+
+        celery_app.bot = bot
+
+        dp = Dispatcher(bot=bot)
 
         if router:
             dp.include_router(router)
 
         celery_app.dp = dp
-        celery_app.bot = bot
 
         register_default_telegram_task(celery_app)
 
