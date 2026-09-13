@@ -16,3 +16,7 @@ __pycache__/
 *.DS_Store
 
 **/.cache/*
+
+# Local FaceFusion integration-test media and generated results
+/tests/faceswap_bot/*.jpg
+/tests/faceswap_bot/*.mp4

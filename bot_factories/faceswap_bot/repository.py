@@ -1,9 +1,12 @@
 import json
 import logging
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 from aiogram import Bot
+
+from shared.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -11,30 +14,33 @@ logger = logging.getLogger(__name__)
 cache_folder = Path(__file__).parent / ".cache"
 
 
-async def process_face_fusion_task(photo_path: Path, video_path: Path) -> dict:
-    url = "http://api/generate"
-
-    # Convert Path objects to strings
+async def process_face_fusion_task(photo_path: Path, video_path: Path) -> Path:
+    output_path = video_path.parent / f"result-{uuid4().hex}.mp4"
     payload = {
-        "photo_path": str(photo_path),
-        "video_path": str(video_path),
+        "source_paths": [str(photo_path.resolve())],
+        "target_path": str(video_path.resolve()),
+        "output_path": str(output_path.resolve()),
     }
 
-    logger.info(f"Sending generation request: {json.dumps(payload, ensure_ascii=False)}")
+    logger.info(
+        f"Sending generation request: {json.dumps(payload, ensure_ascii=False)}"
+    )
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(url, json=payload)
+        timeout = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(settings.faceswap_api_url, json=payload)
 
         response.raise_for_status()
 
         logger.info(f"Success response: {response.text}")
-        return response.json()
+        if not output_path.is_file():
+            raise RuntimeError(f"FaceFusion did not create {output_path}")
+        return output_path
 
     except httpx.HTTPError as e:
         logger.error(f"HTTP error: {e}")
-        return {"error": str(e), "success": False}
-
+        raise RuntimeError(f"FaceFusion request failed: {e}") from e
 
 
 async def save_document(bot: Bot, file_id: str, file_name: str) -> Path:
