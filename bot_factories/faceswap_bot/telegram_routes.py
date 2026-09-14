@@ -1,3 +1,4 @@
+import logging
 import mimetypes
 
 from aiogram import F, Router
@@ -11,6 +12,18 @@ from bot_factories.faceswap_bot.repository import (
 )
 
 faceswap_router = Router()
+logger = logging.getLogger(__name__)
+
+STAGE_LABELS = {
+    "queued": "queued",
+    "starting": "starting FaceFusion",
+    "downloading": "downloading models",
+    "analysing": "analysing faces",
+    "extracting": "extracting frames",
+    "processing": "swapping faces",
+    "merging": "merging video",
+    "complete": "generation complete",
+}
 
 
 def extract_media(message: Message) -> tuple[str, str, str] | None:
@@ -42,7 +55,23 @@ def extract_media(message: Message) -> tuple[str, str, str] | None:
 
 
 async def generate_result(message: Message, state: FSMContext, data: dict) -> None:
-    await message.answer("Photo and video received. Generation started...")
+    progress_message = await message.answer("Face swap: 0% — preparing inputs")
+    last_progress = ("", -1)
+
+    async def report_progress(status: dict) -> None:
+        nonlocal last_progress
+        stage = str(status.get("stage", "processing"))
+        percent = int(status.get("percent", 0))
+        current = (stage, percent)
+        if current == last_progress:
+            return
+        last_progress = current
+        label = STAGE_LABELS.get(stage, stage.replace("_", " "))
+        try:
+            await progress_message.edit_text(f"Face swap: {percent}% — {label}")
+        except Exception as exc:
+            logger.warning("Could not update Telegram progress: %s", exc)
+
     try:
         photo_path = await save_document(
             bot=message.bot,
@@ -57,13 +86,18 @@ async def generate_result(message: Message, state: FSMContext, data: dict) -> No
         output_path = await process_face_fusion_task(
             photo_path=photo_path,
             video_path=video_path,
+            progress_callback=report_progress,
         )
+        await progress_message.edit_text("Face swap: 100% — uploading result")
         await message.answer_document(
             FSInputFile(output_path),
             caption="Face swap complete.",
         )
+        await progress_message.edit_text("Face swap complete — 100%")
     except Exception:
-        await message.answer("Face swap failed. Check the local worker log.")
+        await progress_message.edit_text(
+            "Face swap failed. Check the local worker log."
+        )
         raise
     finally:
         await state.clear()
