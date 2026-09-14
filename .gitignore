@@ -16,3 +16,6 @@ __pycache__/
 *.DS_Store
 
 **/.cache/*
+
+# Bot-local integration-test data and generated results
+/bot_factories/*/tests/data/

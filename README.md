@@ -39,11 +39,11 @@ This lets you prototype AI-powered bots **locally**, with full GPU access, while
 
     /api                 – FastAPI webhook  
     /worker              – Celery setup  
-    /bot_factory         – aiogram bots (customizable)  
+    /bot_factories       – isolated aiogram bot implementations
     /shared              – configs, clients  
 
 If you want to build a fully customized bot, place it inside
-`bot_factory`.\
+`bot_factories`.\
 Bot customization is essentially about defining **aiogram routes and
 handlers**.\
 The rest of the architecture remains unchanged.
@@ -73,6 +73,11 @@ WEBHOOK_SECRET_TOKEN=super-secret
 REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_PASSWORD=guest1
+
+# Select the task and queue belonging to the worker this gateway serves.
+TELEGRAM_TASK_NAME=echo_bot.process_telegram_update
+TELEGRAM_QUEUE=echo_bot
+TELEGRAM_REQUEST_TIMEOUT=600
 ```
 
 All variables are loaded via `shared/config.py`.
@@ -107,7 +112,7 @@ docker compose down -v
 Run your local worker that contains the **aiogram bot handlers** and executes heavy processing:
 
 ``` bash
-celery -A bot_factories.echo_bot.celery_app worker --loglevel=info
+bot_factories/echo_bot/start_worker.sh
 ```
 This lets you run AI-heavy tasks (audio/video processing, image generation, etc.) locally, while the cloud instance only receives webhooks.
 
@@ -130,10 +135,20 @@ https://your-domain.com/webhook
 
 To create a custom bot:
 
-1.  Add a file inside `bot_factory/`.
-2.  Define aiogram routers and handlers.
-3.  Connect the bot in the worker if needed.
-4.  No changes required to the core architecture.
+1. Add a package inside `bot_factories/`.
+2. Keep its routes, service configuration, launch scripts, and specific tests in that package.
+3. Create a Celery app with a unique task name and queue name.
+4. Configure the gateway's `TELEGRAM_TASK_NAME` and `TELEGRAM_QUEUE` to match.
+
+The shared gateway and worker modules contain no service-specific processing code.
+
+The FaceSwap integration test is opt-in because it requires a running local
+FaceFusion HTTP service and ignored media fixtures under
+`bot_factories/faceswap_bot/tests/data/`:
+
+``` bash
+RUN_FACESWAP_INTEGRATION=1 .venv/bin/pytest bot_factories/faceswap_bot/tests/test_integration.py
+```
 
 ## License
 
