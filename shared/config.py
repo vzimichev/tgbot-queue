@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # Worker routing selected by this gateway deployment
     telegram_task_name: str = "echo_bot.process_telegram_update"
     telegram_queue: str = "echo_bot"
+    telegram_request_timeout: float = 600.0
 
     class Config:
         env_file = ".env"

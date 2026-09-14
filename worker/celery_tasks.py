@@ -22,7 +22,16 @@ def register_default_telegram_task(celery_app, *, task_name: str):
         if loop is None or loop.is_closed():
             loop = asyncio.new_event_loop()
             celery_app.telegram_event_loop = loop
-        loop.run_until_complete(dp.feed_update(bot=bot, update=update))
+        try:
+            loop.run_until_complete(dp.feed_update(bot=bot, update=update))
+        except Exception as error:
+            logger.exception(
+                "Telegram update failed: error=%r cause=%r context=%r",
+                error,
+                error.__cause__,
+                error.__context__,
+            )
+            raise
 
         return {"status": "ok"}
 

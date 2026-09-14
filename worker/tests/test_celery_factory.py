@@ -24,6 +24,7 @@ class CeleryFactoryTest(unittest.TestCase):
 
         self.assertIn("sample_bot.process_telegram_update", app.tasks)
         self.assertEqual(app.conf.task_default_queue, "sample_bot")
+        self.assertEqual(app.bot.session.timeout, settings.telegram_request_timeout)
 
     def test_worker_requires_explicit_routing(self):
         with self.assertRaises(ValueError):

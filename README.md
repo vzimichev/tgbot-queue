@@ -77,6 +77,7 @@ REDIS_PASSWORD=guest1
 # Select the task and queue belonging to the worker this gateway serves.
 TELEGRAM_TASK_NAME=echo_bot.process_telegram_update
 TELEGRAM_QUEUE=echo_bot
+TELEGRAM_REQUEST_TIMEOUT=600
 ```
 
 All variables are loaded via `shared/config.py`.

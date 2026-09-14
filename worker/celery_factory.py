@@ -2,6 +2,7 @@ from typing import Optional
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from celery import Celery
 
@@ -43,6 +44,7 @@ class CeleryFactory:
 
         bot = Bot(
             token=settings.telegram_token,
+            session=AiohttpSession(timeout=settings.telegram_request_timeout),
             default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
         )
 
