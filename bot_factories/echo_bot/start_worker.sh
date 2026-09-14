@@ -62,7 +62,7 @@ fi
 
 echo "Starting echo worker. Press Ctrl+C to stop."
 .venv/bin/celery \
-    -A bot_factories.faceswap_bot.celery_app \
+    -A bot_factories.echo_bot.celery_app \
     worker \
     --loglevel=info \
     --concurrency=1 \

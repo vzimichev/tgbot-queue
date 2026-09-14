@@ -6,7 +6,7 @@ from uuid import uuid4
 import httpx
 from aiogram import Bot
 
-from shared.config import settings
+from bot_factories.faceswap_bot.config import faceswap_settings
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ async def process_face_fusion_task(photo_path: Path, video_path: Path) -> Path:
     try:
         timeout = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(settings.faceswap_api_url, json=payload)
+            response = await client.post(faceswap_settings.api_url, json=payload)
 
         response.raise_for_status()
 

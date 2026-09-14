@@ -13,6 +13,9 @@ class CeleryFactory:
     @staticmethod
     def create_app(
         router: Optional[Router] = None,
+        *,
+        task_name: Optional[str] = None,
+        queue_name: Optional[str] = None,
     ) -> Celery:
         celery_app = Celery(
             "worker",
@@ -28,18 +31,27 @@ class CeleryFactory:
         celery_app.conf.broker_heartbeat = 30
         celery_app.conf.broker_connection_retry_on_startup = True
 
+        # The gateway only needs a Celery producer. Telegram runtime objects
+        # belong exclusively to concrete bot workers.
+        if router is None:
+            return celery_app
+
+        if not task_name or not queue_name:
+            raise ValueError("Bot workers require task_name and queue_name")
+
+        celery_app.conf.task_default_queue = queue_name
+
         bot = Bot(
             token=settings.telegram_token,
             default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
         )
 
         dp = Dispatcher(bot=bot)
-        if router:
-            dp.include_router(router)
+        dp.include_router(router)
 
         celery_app.bot = bot
         celery_app.dp = dp
 
-        register_default_telegram_task(celery_app)
+        register_default_telegram_task(celery_app, task_name=task_name)
 
         return celery_app

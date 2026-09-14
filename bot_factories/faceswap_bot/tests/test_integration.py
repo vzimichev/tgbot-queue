@@ -6,9 +6,13 @@ from pathlib import Path
 from bot_factories.faceswap_bot.repository import process_face_fusion_task
 
 
+@unittest.skipUnless(
+    os.getenv("RUN_FACESWAP_INTEGRATION") == "1",
+    "set RUN_FACESWAP_INTEGRATION=1 to run the local FaceFusion integration test",
+)
 class FaceSwapIntegrationTest(unittest.TestCase):
     def test_photo_and_video_fixtures_produce_mp4(self):
-        fixtures_dir = Path(__file__).resolve().parent
+        fixtures_dir = Path(__file__).resolve().parent / "data"
         photo_path = Path(
             os.getenv(
                 "FACESWAP_TEST_PHOTO",

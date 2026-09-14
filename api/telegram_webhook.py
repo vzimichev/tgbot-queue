@@ -38,7 +38,11 @@ async def telegram_webhook(
     logger.info("Incoming webhook body: %s", json.dumps(body))
 
     # Send the JSON to Celery
-    celery_app.send_task("process_telegram_task", args=[body])
+    celery_app.send_task(
+        settings.telegram_task_name,
+        args=[body],
+        queue=settings.telegram_queue,
+    )
 
     logger.info("Task sent to Celery")
 

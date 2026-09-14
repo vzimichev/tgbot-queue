@@ -17,6 +17,5 @@ __pycache__/
 
 **/.cache/*
 
-# Local FaceFusion integration-test media and generated results
-/bot_factories/faceswap_bot/tests/*.jpg
-/bot_factories/faceswap_bot/tests/*.mp4
+# Bot-local integration-test data and generated results
+/bot_factories/*/tests/data/

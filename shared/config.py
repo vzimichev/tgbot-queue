@@ -13,8 +13,9 @@ class Settings(BaseSettings):
     redis_port: int = 6379
     redis_password: Optional[str] = None
 
-    # Local FaceFusion HTTP service
-    faceswap_api_url: str = "http://127.0.0.1:8001/run"
+    # Worker routing selected by this gateway deployment
+    telegram_task_name: str = "echo_bot.process_telegram_update"
+    telegram_queue: str = "echo_bot"
 
     class Config:
         env_file = ".env"
