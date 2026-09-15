@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 
 
 class FaceSwapSettings(BaseSettings):
-    api_url: str = "http://127.0.0.1:8001/run"
+    api_base_url: str = "http://127.0.0.1:8001"
 
     class Config:
         env_file = ".env"
