@@ -1,4 +1,4 @@
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
@@ -38,4 +38,9 @@ async def cmd_echo(msg: Message):
     if len(parts) == 1:
         await msg.answer("Please provide text to echo. Example: /echo hello")
     else:
-        await msg.answer(parts[1])
+        await msg.answer(parts[1], parse_mode=None)
+
+
+@echo_router.message(F.text)
+async def echo_text(msg: Message):
+    await msg.answer(msg.text, parse_mode=None)
