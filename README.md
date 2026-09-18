@@ -116,8 +116,9 @@ branch in `/opt/tgbot-queue`, configures local-only Redis, runs
 It can be rerun to update the checkout. Pass an email address as a third
 argument if you want certificate expiry notices. The gateway bot token stays on
 its Celery worker machine; configure the Telegram webhook separately after
-bootstrap. The admin bot receives updates at `/admin/webhook` through the same
-Nginx and FastAPI gateway. Its SQLite database is stored at
+bootstrap. The admin bot receives updates at the same `/webhook` URL as the
+primary bot; the gateway routes requests by their distinct secret headers. Its
+SQLite database is stored at
 `/var/lib/tgbot-admin/admin.sqlite3` and survives updates. The installer stops
 the old admin polling service before registering the webhook. The admin bot
 does not use Redis or Celery; heavy workers remain off the cloud host. Check
@@ -139,7 +140,7 @@ This starts:
 - **gateway**: FastAPI server receiving Telegram webhook calls
 - **redis**: Message broker
 - **flower**: Celery monitoring UI
-- **admin webhook**: `/admin/webhook` on the gateway, with persistent SQLite storage
+- **admin webhook**: the shared `/webhook` route, with persistent SQLite storage
 
 Set all `ADMIN_BOT_*` values in `.env` before starting, then register the
 webhook with `docker compose exec telegram_gateway python -m
