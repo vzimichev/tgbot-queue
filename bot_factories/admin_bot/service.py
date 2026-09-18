@@ -18,26 +18,10 @@ class AdminService:
                 self.register(managed["bot"])
             return
         message = update.get("message", {})
-        sender_id = message.get("from", {}).get("id")
-        chat_id = message.get("chat", {}).get("id")
-        if sender_id != self.owner and sender_id == chat_id:
-            if (message.get("text") or "").split(maxsplit=1)[0].split("@")[
-                0
-            ] == "/start":
-                for bot in self.repo.list_bots():
-                    if bot.get("recipient_id") == sender_id:
-                        if self.grant_access(bot):
-                            self.say(
-                                "Telegram подтвердил доступ получателя.\n"
-                                + self.describe(bot)
-                            )
-                        else:
-                            self.say(
-                                "Telegram пока не подтвердил доступ.\n"
-                                + self.describe(bot)
-                            )
-            return
-        if sender_id != self.owner or chat_id != self.owner:
+        if (
+            message.get("from", {}).get("id") != self.owner
+            or message.get("chat", {}).get("id") != self.owner
+        ):
             return
         if message.get("users_shared"):
             shared = message["users_shared"]
@@ -70,14 +54,9 @@ class AdminService:
                 record = self.repo.get(f"bot:{draft['bot_id']}")
                 record.update(recipient)
                 self.repo.put(f"bot:{draft['bot_id']}", record)
-                granted = self.grant_access(record)
+                self.grant_access(record)
                 self.say(
-                    (
-                        "Доступ настроен.\n"
-                        if granted
-                        else "Telegram пока не подтвердил доступ.\n"
-                    )
-                    + self.describe(record),
+                    "Доступ настроен.\n" + self.describe(record),
                     reply_markup=self.share_keyboard(record),
                 )
                 self.repo.delete("draft")
@@ -266,23 +245,15 @@ class AdminService:
         if not record.get("recipient_id"):
             record["access_status"] = "needs_recipient"
             self.repo.put(f"bot:{record['bot_id']}", record)
-            return False
+            return
         self.api.call(
             "setManagedBotAccessSettings",
             user_id=record["bot_id"],
             is_access_restricted=True,
             added_user_ids=[record["recipient_id"]],
         )
-        settings = self.api.call(
-            "getManagedBotAccessSettings", user_id=record["bot_id"]
-        )
-        if not settings.get("is_access_restricted") or record["recipient_id"] not in {
-            user["id"] for user in settings.get("added_users", [])
-        }:
-            return False
         record["access_status"] = "configured"
         self.repo.put(f"bot:{record['bot_id']}", record)
-        return True
 
     @staticmethod
     def share_keyboard(bot):
@@ -340,12 +311,7 @@ class AdminService:
             + (
                 "Доступ выдан выбранному пользователю и владельцу.\n"
                 if bot.get("access_status") == "configured"
-                else (
-                    "Доступ ещё не настроен. Попроси получателя открыть этот "
-                    "админ-бот и отправить /start.\n"
-                    if bot.get("recipient_id")
-                    else "Доступ ещё не настроен.\n"
-                )
+                else "Доступ ещё не настроен.\n"
             )
             + f"Назначить доступ: /access {bot.get('bot_id', '')}\n"
             + "Бот пустой, обработчики не подключены."

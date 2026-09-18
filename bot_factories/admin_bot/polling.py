@@ -16,9 +16,7 @@ def main():
     config = admin_settings
     if not config.token.get_secret_value() or config.owner_id <= 0:
         raise SystemExit("Admin bot token and owner ID are required")
-    folder = Path(
-        os.environ.get("ADMIN_BOT_DATA_DIR", Path(__file__).parent / ".cache")
-    )
+    folder = Path(os.environ.get("ADMIN_BOT_DATA_DIR", Path(__file__).parent / ".cache"))
     folder.mkdir(parents=True, exist_ok=True)
     # Prevent two local polling processes from consuming the same bot's updates.
     import fcntl
@@ -30,11 +28,6 @@ def main():
     me = api.call("getMe")
     api.call("deleteWebhook", drop_pending_updates=False)
     service = AdminService(api, repo, config.owner_id)
-    for bot in repo.list_bots():
-        try:
-            service.grant_access(bot)
-        except RuntimeError as error:
-            logging.warning("Could not refresh managed bot access: %s", error)
     print(f"Admin bot running: https://t.me/{me['username']}", flush=True)
     while True:
         try:
