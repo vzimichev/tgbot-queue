@@ -3,6 +3,8 @@
 
 # Virtual environments
 .venv/
+.venvs-cloud/
+.cloud-build/
 
 # Local environment files
 .env

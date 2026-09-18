@@ -58,7 +58,7 @@ Celery worker.
 ## Requirements
 
 - Python 3.13
-- Docker
+- Docker (only for the Docker deployment)
 - Telegram Bot Token
 - Domain name (Telegram requires HTTPS for webhooks)
 
@@ -83,6 +83,33 @@ TELEGRAM_REQUEST_TIMEOUT=600
 All variables are loaded via `shared/config.py`.
 
 ## Running the Cloud Gateway
+
+### Without Docker (Debian 13 or Ubuntu)
+
+On a prepared Debian 13 or Ubuntu 26.04 server, install and configure Redis with a password and
+Nginx with HTTPS forwarding `/webhook` to `http://127.0.0.1:8000`. Install
+Poetry (Python 3.13 is included with Debian 13; Python 3.14 with Ubuntu 26.04).
+Put the repository in `/opt/tgbot-queue` and a private
+`.env` beside `pyproject.toml`;
+set `REDIS_HOST=127.0.0.1`, the local Redis port and password, the Telegram
+webhook secret, and the task name and queue consumed by your worker.
+Then run from the repository directory:
+
+```sh
+sudo bash deploy/cloud/install.sh
+```
+
+The script enables and checks Redis and Nginx, installs Python dependencies in a
+separate Poetry environment, and installs/restarts `tgbot-gateway.service`. It does
+not start a Celery worker or create an HTTPS certificate. Run a worker that
+consumes `TELEGRAM_QUEUE` wherever its processing resources are available.
+Existing bot worker services are left untouched.
+
+The script selects Python 3.14 or 3.13, both allowed by the project's
+`^3.13` requirement. Ubuntu 24.04 has Python 3.12 by default and requires a
+separate Python installation.
+
+### With Docker
 
 Start all cloud-side services:
 ``` bash
