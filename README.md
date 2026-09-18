@@ -57,7 +57,7 @@ Celery worker.
 
 ## Requirements
 
-- Python 3.13
+- Python 3.13 or 3.14
 - Docker (only for the Docker deployment)
 - Telegram Bot Token
 - Domain name (Telegram requires HTTPS for webhooks)
@@ -105,10 +105,8 @@ not start a Celery worker or create an HTTPS certificate. Run a worker that
 consumes `TELEGRAM_QUEUE` wherever its processing resources are available.
 Existing bot worker services are left untouched.
 
-The script prefers Python 3.13 when available. Although the project's `^3.13`
-requirement also allows Python 3.14, some pinned dependencies in `poetry.lock`
-do not provide Python 3.14 wheels. Install Python 3.13 alongside Ubuntu 26.04
-before deploying with this lock file. Ubuntu 24.04 has Python 3.12 by default.
+The script uses Python 3.14 on Ubuntu 26.04 and Python 3.13 on Debian 13.
+The lock file includes wheels for both. Ubuntu 24.04 has Python 3.12 by default.
 
 ### With Docker
 
