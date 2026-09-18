@@ -81,7 +81,7 @@ systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
 ready=false
-for _ in {1..10}; do
+for _ in {1..45}; do
     if curl --fail --silent --max-time 2 http://127.0.0.1:8000/openapi.json >/dev/null; then
         ready=true
         break
