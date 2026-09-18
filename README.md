@@ -227,6 +227,9 @@ Before issuing a creation request, the admin bot checks for a saved bot or a
 pending creation for the recipient. Selecting the same recipient again shows the
 existing bot or repeats the pending request with its original username and budget.
 `/access` also prevents assigning a second bot to that recipient.
+If Telegram has not yet recognized the selected recipient, ask them to open the
+admin bot and send `/start`. The admin bot retries access on that message and
+checks the actual Telegram access list before reporting success.
 
 Tokens, parameters and polling position persist in
 `bot_factories/admin_bot/.cache/admin.sqlite3` (excluded from Git). This file

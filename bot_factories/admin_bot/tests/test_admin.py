@@ -32,6 +32,10 @@ class AdminTest(unittest.TestCase):
         self.api.call.side_effect = lambda method, **kw: {
             "getMe": {"username": "manager_bot"},
             "getManagedBotToken": "secret-token",
+            "getManagedBotAccessSettings": {
+                "is_access_restricted": True,
+                "added_users": [{"id": 456}],
+            },
         }.get(method, True)
         self.service = AdminService(self.api, self.repo, 123)
 
@@ -110,6 +114,7 @@ class AdminTest(unittest.TestCase):
                     "getMe",
                     "getManagedBotToken",
                     "setManagedBotAccessSettings",
+                    "getManagedBotAccessSettings",
                 )
                 for c in self.api.call.call_args_list
             )
@@ -226,6 +231,31 @@ class AdminTest(unittest.TestCase):
         self.api.call.side_effect = original
         self.select_user()
         self.assertEqual(self.repo.get("bot:789")["access_status"], "configured")
+
+    def test_access_must_be_confirmed_by_telegram(self):
+        self.repo.put(
+            "bot:789",
+            {"bot_id": 789, "username": "child_bot", "remaining_seconds": 600},
+        )
+        self.message("/access 789")
+        original = self.api.call.side_effect
+
+        def missing_user(method, **kwargs):
+            if method == "getManagedBotAccessSettings":
+                return {"is_access_restricted": True}
+            return original(method, **kwargs)
+
+        self.api.call.side_effect = missing_user
+        self.select_user()
+        self.assertEqual(self.repo.get("bot:789")["access_status"], "pending")
+        self.assertIn(
+            "пока не подтвердил", self.api.call.call_args_list[-1].kwargs["text"]
+        )
+
+        self.api.call.side_effect = original
+        self.message("/start", user=456, chat=456)
+        self.assertEqual(self.repo.get("bot:789")["access_status"], "configured")
+        self.api.call.assert_any_call("getManagedBotAccessSettings", user_id=789)
 
     def test_invitation_targets_assigned_user(self):
         from urllib.parse import urlsplit, parse_qs
