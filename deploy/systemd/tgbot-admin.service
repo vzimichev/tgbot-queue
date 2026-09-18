@@ -1,0 +1,23 @@
+[Unit]
+Description=Private Telegram admin bot worker
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/tgbot-queue
+EnvironmentFile=/opt/tgbot-queue/.env
+ExecStartPre=/opt/tgbot-queue/.venv/bin/python -c "from bot_factories.admin_bot.config import admin_settings; admin_settings.validate_runtime()"
+ExecStart=/opt/tgbot-queue/.venv/bin/celery -A bot_factories.admin_bot.celery_app worker --loglevel=info --concurrency=1 --pool=solo -Q admin_bot -n admin@%%h --without-gossip --without-mingle
+Restart=on-failure
+RestartSec=5
+User=www-data
+Group=www-data
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+[Install]
+WantedBy=multi-user.target

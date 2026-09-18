@@ -188,3 +188,82 @@ RUN_FACESWAP_INTEGRATION=1 .venv/bin/pytest bot_factories/faceswap_bot/tests/tes
 ## License
 
 MIT
+
+## Private admin bot and managed echo bots
+
+`bot_factories/admin_bot` is a separate bot on the existing gateway/queue
+infrastructure. Only `ADMIN_BOT_OWNER_ID` can use it, in a private chat.
+The initial token is the placeholder `ххх`; nothing contacts Telegram until
+configured and explicitly started.
+
+1. Create the admin bot in BotFather and enable bot management in its Mini App.
+2. Set these values in `.env` on the gateway and both worker hosts:
+
+   ```env
+   ADMIN_BOT_TOKEN=ххх
+   ADMIN_BOT_OWNER_ID=123456789
+   ADMIN_BOT_PUBLIC_BASE_URL=https://your-domain.com
+   ADMIN_BOT_WEBHOOK_SECRET=replace-with-a-random-secret
+   ```
+
+   Replace `ххх` with the real token. `OWNER_ID` is your numeric Telegram user ID.
+   Generate a webhook secret with `openssl rand -hex 32`.
+   Keep the same owner ID and webhook configuration on all hosts.
+3. Deploy the updated gateway. HTTPS must forward `/webhook/admin` and
+   `/webhook/managed/{bot_id}` to FastAPI. Existing `/webhook` remains available.
+4. Start each worker in a separate terminal:
+
+   ```bash
+   bash bot_factories/admin_bot/start_worker.sh
+   bash bot_factories/echo_bot/start_managed_worker.sh
+   ```
+
+   These scripts use Redis connection settings from `.env`. For a remote Redis,
+   establish a private connection/SSH tunnel first; these scripts do not create
+   one. Both workers use the same Redis as the gateway.
+5. Register the admin webhook:
+
+   ```bash
+   .venv/bin/python -m bot_factories.admin_bot.setup
+   ```
+
+6. Open the admin bot, send `/start`, press **Создать эхо-бота**, and complete
+   Telegram's creation dialog. `/bots` lists bots; `/retry BOT_ID` retries a
+   failed connection. The echo worker must be running to receive replies.
+
+All created bots use the existing echo handlers. Text is echoed literally,
+including Markdown characters. No additional process is created per bot.
+Redis DB 3 stores metadata and webhook secrets, never child bot tokens; workers
+fetch tokens from the manager API when needed. Restrict Redis access to trusted
+hosts (workers share access to the manager token). Compose enables AOF
+persistence; retain and back up its data volume. Do not use `down -v` when you
+want to retain registered bots.
+
+The adapter calls Managed Bots methods directly because the installed aiogram
+version does not model them yet. See the
+[Telegram Managed Bots API](https://core.telegram.org/bots/api#keyboardbuttonrequestmanagedbot).
+Telegram creation/token updates reconnect the bot; ownership changes away from
+the configured owner disable it locally. Duplicate creation updates overwrite
+the same registry entry rather than adding another bot.
+
+This first version has no deletion UI or delivery deduplication: a redelivered
+Telegram/Celery update may produce a repeated echo. It does not add FaceSwap
+multibot support.
+
+### systemd deployment
+
+For the existing `/opt/tgbot-queue` server installation, unit templates are in
+`deploy/systemd/`. Once the admin settings are configured in the server `.env`:
+
+```bash
+sudo install -m 644 deploy/systemd/tgbot-admin.service /etc/systemd/system/
+sudo install -m 644 deploy/systemd/tgbot-managed-echo.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now tgbot-admin tgbot-managed-echo
+sudo systemctl restart tgbot-gateway
+.venv/bin/python -m bot_factories.admin_bot.setup
+```
+
+These lightweight echo and admin workers can run on the gateway host; the
+existing FaceSwap worker remains on the client machine. For a system Redis
+installation, configure persistence separately (Compose settings do not apply).
