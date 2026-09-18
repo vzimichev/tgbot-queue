@@ -1,0 +1,22 @@
+[Unit]
+Description=Telegram webhook gateway
+After=network-online.target redis-server.service
+Wants=network-online.target
+Requires=redis-server.service
+
+[Service]
+Type=simple
+User=tgbot-gateway
+Group=tgbot-gateway
+WorkingDirectory=@PROJECT_DIR@
+EnvironmentFile=@PROJECT_DIR@/.env
+ExecStart=@VENV_DIR@/bin/uvicorn api.main:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
