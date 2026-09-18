@@ -86,24 +86,33 @@ All variables are loaded via `shared/config.py`.
 
 ### Without Docker (Debian 13 or Ubuntu)
 
-On a prepared Debian 13 or Ubuntu 26.04 server, install and configure Redis with a password and
-Nginx with HTTPS forwarding `/webhook` to `http://127.0.0.1:8000`. Install
-Poetry (Python 3.13 is included with Debian 13; Python 3.14 with Ubuntu 26.04).
-Put the repository in `/opt/tgbot-queue` and a private
-`.env` beside `pyproject.toml`;
-set `REDIS_HOST=127.0.0.1`, the local Redis port and password, the Telegram
-webhook secret, and the task name and queue consumed by your worker.
-Then run from the repository directory:
+On a fresh Ubuntu 26.04 or Debian 13 server, point your domain at the server
+and allow inbound TCP ports 80 and 443. Create a private `/root/gateway.env`:
 
-```sh
-sudo bash deploy/cloud/install.sh
+```env
+WEBHOOK_SECRET_TOKEN=replace-with-a-random-secret
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+REDIS_PASSWORD=replace-with-a-random-password
+TELEGRAM_TASK_NAME=faceswap_bot.process_telegram_update
+TELEGRAM_QUEUE=faceswap_bot
 ```
 
-The script enables and checks Redis and Nginx, installs Python dependencies in a
-separate Poetry environment, and installs/restarts `tgbot-gateway.service`. It does
-not start a Celery worker or create an HTTPS certificate. Run a worker that
-consumes `TELEGRAM_QUEUE` wherever its processing resources are available.
-Existing bot worker services are left untouched.
+Use a password made of letters, digits and common punctuation without spaces.
+Download and run the bootstrap script, passing your real domain and env file:
+
+```sh
+curl -fsSLo bootstrap.sh https://raw.githubusercontent.com/vzimichev/tgbot-queue/codex/cloud-gateway-deploy/deploy/cloud/bootstrap.sh
+sudo bash bootstrap.sh tgbot-queue.duckdns.org /root/gateway.env
+```
+
+The bootstrap adds swap on small machines, installs packages, checks out this
+branch in `/opt/tgbot-queue`, configures local-only Redis, runs
+`deploy/cloud/install.sh`, and configures Nginx and a Let's Encrypt certificate.
+It can be rerun to update the checkout. Pass an email address as a third
+argument if you want certificate expiry notices. The bot token stays on the
+worker machine; configure the Telegram webhook separately after bootstrap.
+No Celery worker is started on the cloud host.
 
 The script uses Python 3.14 on Ubuntu 26.04 and Python 3.13 on Debian 13.
 The lock file includes wheels for both. Ubuntu 24.04 has Python 3.12 by default.
