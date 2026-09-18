@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Install the cloud gateway on Debian 13 or Ubuntu 26.04 with HTTPS in Nginx.
+# Install the cloud gateway and admin bot on Debian 13 or Ubuntu 26.04.
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SERVICE_NAME="tgbot-gateway"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
+ADMIN_SERVICE_NAME="tgbot-admin-bot-worker"
+ADMIN_UNIT_PATH="/etc/systemd/system/${ADMIN_SERVICE_NAME}.service"
 
 die() { echo "Error: $*" >&2; exit 1; }
 
@@ -34,9 +36,12 @@ for line in Path(sys.argv[1]).read_text().splitlines():
     key, value = line.split("=", 1)
     values[key.strip()] = value.strip().strip("\"'")
 for key in ("REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD",
-            "WEBHOOK_SECRET_TOKEN", "TELEGRAM_TASK_NAME", "TELEGRAM_QUEUE"):
+            "WEBHOOK_SECRET_TOKEN", "TELEGRAM_TASK_NAME", "TELEGRAM_QUEUE",
+            "ADMIN_BOT_TOKEN", "ADMIN_BOT_OWNER_ID"):
     if not values.get(key):
         raise SystemExit(f"Error: {key} must be set in .env")
+if not values["ADMIN_BOT_OWNER_ID"].isdigit() or int(values["ADMIN_BOT_OWNER_ID"]) <= 0:
+    raise SystemExit("Error: ADMIN_BOT_OWNER_ID must be a positive integer")
 if values["REDIS_HOST"] not in ("127.0.0.1", "localhost"):
     raise SystemExit("Error: REDIS_HOST must point to local Redis on the cloud host")
 if not values["REDIS_PORT"].isdigit():
@@ -66,6 +71,7 @@ poetry env use "$PYTHON_BIN"
 poetry install --only main --no-root --no-interaction
 VENV_DIR="$(poetry env info --path)"
 [[ -x "$VENV_DIR/bin/uvicorn" ]] || die "uvicorn was not installed"
+[[ -x "$VENV_DIR/bin/python" ]] || die "Python was not installed"
 
 # Run the gateway with its own account. The application also reads .env itself.
 if ! id -u tgbot-gateway >/dev/null 2>&1; then
@@ -76,10 +82,16 @@ chmod 600 "$PROJECT_DIR/.env"
 sed -e "s|@PROJECT_DIR@|$PROJECT_DIR|g" \
     -e "s|@VENV_DIR@|$VENV_DIR|g" \
     "$PROJECT_DIR/deploy/cloud/tgbot-gateway.service.in" > "$UNIT_PATH"
+sed -e "s|@PROJECT_DIR@|$PROJECT_DIR|g" \
+    -e "s|@VENV_DIR@|$VENV_DIR|g" \
+    "$PROJECT_DIR/deploy/cloud/tgbot-admin-bot-worker.service.in" > "$ADMIN_UNIT_PATH"
 chmod 644 "$UNIT_PATH"
+chmod 644 "$ADMIN_UNIT_PATH"
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
+systemctl enable "$ADMIN_SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
+systemctl restart "$ADMIN_SERVICE_NAME"
 ready=false
 for _ in {1..45}; do
     if curl --fail --silent --max-time 2 http://127.0.0.1:8000/openapi.json >/dev/null; then
@@ -89,4 +101,10 @@ for _ in {1..45}; do
     sleep 1
 done
 [[ $ready == true ]] || die "gateway did not answer on 127.0.0.1:8000; check journalctl -u $SERVICE_NAME"
-echo "Gateway is running. Redis and Nginx remain under their existing systemd services."
+systemctl is-active --quiet "$ADMIN_SERVICE_NAME" \
+    || die "admin bot is not running; check journalctl -u $ADMIN_SERVICE_NAME"
+available_kib="$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)"
+if [[ $available_kib -lt 262144 ]]; then
+    echo "WARNING: only $((available_kib / 1024)) MiB RAM is available; monitor memory and swap." >&2
+fi
+echo "Gateway and admin bot worker are running. SQLite is stored in /var/lib/tgbot-admin."

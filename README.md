@@ -96,13 +96,15 @@ REDIS_PORT=6379
 REDIS_PASSWORD=replace-with-a-random-password
 TELEGRAM_TASK_NAME=faceswap_bot.process_telegram_update
 TELEGRAM_QUEUE=faceswap_bot
+ADMIN_BOT_TOKEN=replace-with-admin-bot-token
+ADMIN_BOT_OWNER_ID=replace-with-telegram-user-id
 ```
 
 Use a password made of letters, digits and common punctuation without spaces.
 Download and run the bootstrap script, passing your real domain and env file:
 
 ```sh
-curl -fsSLo bootstrap.sh https://raw.githubusercontent.com/vzimichev/tgbot-queue/codex/cloud-gateway-deploy/deploy/cloud/bootstrap.sh
+curl -fsSLo bootstrap.sh https://raw.githubusercontent.com/vzimichev/tgbot-queue/codex/admin-bot-cloud/deploy/cloud/bootstrap.sh
 sudo bash bootstrap.sh tgbot-queue.duckdns.org /root/gateway.env
 ```
 
@@ -110,9 +112,15 @@ The bootstrap adds swap on small machines, installs packages, checks out this
 branch in `/opt/tgbot-queue`, configures local-only Redis, runs
 `deploy/cloud/install.sh`, and configures Nginx and a Let's Encrypt certificate.
 It can be rerun to update the checkout. Pass an email address as a third
-argument if you want certificate expiry notices. The bot token stays on the
-worker machine; configure the Telegram webhook separately after bootstrap.
-No Celery worker is started on the cloud host.
+argument if you want certificate expiry notices. The gateway bot token stays on
+its Celery worker machine; configure the Telegram webhook separately after
+bootstrap. The admin bot runs on the cloud host as a polling worker. Its SQLite
+database is stored at `/var/lib/tgbot-admin/admin.sqlite3` and survives
+service restarts and updates. The admin bot does not use Redis or Celery. Heavy
+bot workers remain off the cloud host. Check
+`systemctl status tgbot-admin-bot-worker` and
+`journalctl -u tgbot-admin-bot-worker` after installation. The service is
+limited to 160 MiB RAM; the installer warns if less than 256 MiB is available.
 
 The script uses Python 3.14 on Ubuntu 26.04 and Python 3.13 on Debian 13.
 The lock file includes wheels for both. Ubuntu 24.04 has Python 3.12 by default.
@@ -129,6 +137,12 @@ This starts:
 - **gateway**: FastAPI server receiving Telegram webhook calls
 - **redis**: Message broker
 - **flower**: Celery monitoring UI
+- **admin_bot_worker**: Telegram polling bot with persistent SQLite storage
+
+Set `ADMIN_BOT_TOKEN` and `ADMIN_BOT_OWNER_ID` in `.env` before starting.
+The database is stored in the `admin_bot_data` Docker volume. The container
+has a 160 MiB RAM limit. Back up the volume before removing it;
+`docker compose down -v` deletes the database.
 
 View logs:
 

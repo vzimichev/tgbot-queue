@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/vzimichev/tgbot-queue.git"
-REPO_BRANCH="codex/cloud-gateway-deploy"
+REPO_BRANCH="codex/admin-bot-cloud"
 PROJECT_DIR="/opt/tgbot-queue"
 DOMAIN="${1:-}"
 ENV_SOURCE="${2:-}"
@@ -69,9 +69,12 @@ for line in Path(sys.argv[1]).read_text().splitlines():
     key, value = line.split('=', 1)
     values[key.strip()] = value.strip().strip("\"'")
 for key in ('REDIS_HOST', 'REDIS_PORT', 'REDIS_PASSWORD',
-            'WEBHOOK_SECRET_TOKEN', 'TELEGRAM_TASK_NAME', 'TELEGRAM_QUEUE'):
+            'WEBHOOK_SECRET_TOKEN', 'TELEGRAM_TASK_NAME', 'TELEGRAM_QUEUE',
+            'ADMIN_BOT_TOKEN', 'ADMIN_BOT_OWNER_ID'):
     if not values.get(key):
         raise SystemExit(f'Error: {key} is missing from .env')
+if not values['ADMIN_BOT_OWNER_ID'].isdigit() or int(values['ADMIN_BOT_OWNER_ID']) <= 0:
+    raise SystemExit('Error: ADMIN_BOT_OWNER_ID must be a positive integer')
 if values['REDIS_HOST'] not in ('127.0.0.1', 'localhost'):
     raise SystemExit('Error: REDIS_HOST must be local')
 if values['REDIS_PORT'] != '6379':
