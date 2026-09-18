@@ -98,6 +98,8 @@ TELEGRAM_TASK_NAME=faceswap_bot.process_telegram_update
 TELEGRAM_QUEUE=faceswap_bot
 ADMIN_BOT_TOKEN=replace-with-admin-bot-token
 ADMIN_BOT_OWNER_ID=replace-with-telegram-user-id
+ADMIN_BOT_PUBLIC_BASE_URL=https://tgbot-queue.duckdns.org
+ADMIN_BOT_WEBHOOK_SECRET=replace-with-another-random-secret
 ```
 
 Use a password made of letters, digits and common punctuation without spaces.
@@ -114,13 +116,13 @@ branch in `/opt/tgbot-queue`, configures local-only Redis, runs
 It can be rerun to update the checkout. Pass an email address as a third
 argument if you want certificate expiry notices. The gateway bot token stays on
 its Celery worker machine; configure the Telegram webhook separately after
-bootstrap. The admin bot runs on the cloud host as a polling worker. Its SQLite
-database is stored at `/var/lib/tgbot-admin/admin.sqlite3` and survives
-service restarts and updates. The admin bot does not use Redis or Celery. Heavy
-bot workers remain off the cloud host. Check
-`systemctl status tgbot-admin-bot-worker` and
-`journalctl -u tgbot-admin-bot-worker` after installation. The service is
-limited to 160 MiB RAM; the installer warns if less than 256 MiB is available.
+bootstrap. The admin bot receives updates at `/admin/webhook` through the same
+Nginx and FastAPI gateway. Its SQLite database is stored at
+`/var/lib/tgbot-admin/admin.sqlite3` and survives updates. The installer stops
+the old admin polling service before registering the webhook. The admin bot
+does not use Redis or Celery; heavy workers remain off the cloud host. Check
+`systemctl status tgbot-gateway` and `journalctl -u tgbot-gateway` after
+installation. The installer warns if less than 256 MiB RAM is available.
 
 The script uses Python 3.14 on Ubuntu 26.04 and Python 3.13 on Debian 13.
 The lock file includes wheels for both. Ubuntu 24.04 has Python 3.12 by default.
@@ -137,12 +139,14 @@ This starts:
 - **gateway**: FastAPI server receiving Telegram webhook calls
 - **redis**: Message broker
 - **flower**: Celery monitoring UI
-- **admin_bot_worker**: Telegram polling bot with persistent SQLite storage
+- **admin webhook**: `/admin/webhook` on the gateway, with persistent SQLite storage
 
-Set `ADMIN_BOT_TOKEN` and `ADMIN_BOT_OWNER_ID` in `.env` before starting.
+Set all `ADMIN_BOT_*` values in `.env` before starting, then register the
+webhook with `docker compose exec telegram_gateway python -m
+bot_factories.admin_bot.set_webhook` after HTTPS is available.
 The database is stored in the `admin_bot_data` Docker volume. The container
-has a 160 MiB RAM limit. Back up the volume before removing it;
-`docker compose down -v` deletes the database.
+serves both webhooks. Back up the volume before removing it; `docker compose
+down -v` deletes the database.
 
 View logs:
 
@@ -205,7 +209,8 @@ MIT
 
 ## Admin bot factory
 
-Standalone admin bot with polling and SQLite. Start from the project directory:
+For local development, the admin bot can still run standalone with polling and
+SQLite. Start from the project directory:
 
 ```sh
 ./bot_factories/admin_bot/start_bot.sh

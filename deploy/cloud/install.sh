@@ -5,8 +5,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SERVICE_NAME="tgbot-gateway"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
-ADMIN_SERVICE_NAME="tgbot-admin-bot-worker"
-ADMIN_UNIT_PATH="/etc/systemd/system/${ADMIN_SERVICE_NAME}.service"
+OLD_ADMIN_SERVICE_NAME="tgbot-admin-bot-worker"
 
 die() { echo "Error: $*" >&2; exit 1; }
 
@@ -37,7 +36,8 @@ for line in Path(sys.argv[1]).read_text().splitlines():
     values[key.strip()] = value.strip().strip("\"'")
 for key in ("REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD",
             "WEBHOOK_SECRET_TOKEN", "TELEGRAM_TASK_NAME", "TELEGRAM_QUEUE",
-            "ADMIN_BOT_TOKEN", "ADMIN_BOT_OWNER_ID"):
+            "ADMIN_BOT_TOKEN", "ADMIN_BOT_OWNER_ID",
+            "ADMIN_BOT_PUBLIC_BASE_URL", "ADMIN_BOT_WEBHOOK_SECRET"):
     if not values.get(key):
         raise SystemExit(f"Error: {key} must be set in .env")
 if not values["ADMIN_BOT_OWNER_ID"].isdigit() or int(values["ADMIN_BOT_OWNER_ID"]) <= 0:
@@ -82,16 +82,10 @@ chmod 600 "$PROJECT_DIR/.env"
 sed -e "s|@PROJECT_DIR@|$PROJECT_DIR|g" \
     -e "s|@VENV_DIR@|$VENV_DIR|g" \
     "$PROJECT_DIR/deploy/cloud/tgbot-gateway.service.in" > "$UNIT_PATH"
-sed -e "s|@PROJECT_DIR@|$PROJECT_DIR|g" \
-    -e "s|@VENV_DIR@|$VENV_DIR|g" \
-    "$PROJECT_DIR/deploy/cloud/tgbot-admin-bot-worker.service.in" > "$ADMIN_UNIT_PATH"
 chmod 644 "$UNIT_PATH"
-chmod 644 "$ADMIN_UNIT_PATH"
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
-systemctl enable "$ADMIN_SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
-systemctl restart "$ADMIN_SERVICE_NAME"
 ready=false
 for _ in {1..45}; do
     if curl --fail --silent --max-time 2 http://127.0.0.1:8000/openapi.json >/dev/null; then
@@ -101,10 +95,23 @@ for _ in {1..45}; do
     sleep 1
 done
 [[ $ready == true ]] || die "gateway did not answer on 127.0.0.1:8000; check journalctl -u $SERVICE_NAME"
-systemctl is-active --quiet "$ADMIN_SERVICE_NAME" \
-    || die "admin bot is not running; check journalctl -u $ADMIN_SERVICE_NAME"
+was_polling=false
+if systemctl is-active --quiet "$OLD_ADMIN_SERVICE_NAME"; then
+    was_polling=true
+    systemctl stop "$OLD_ADMIN_SERVICE_NAME"
+fi
+cd "$PROJECT_DIR"
+if ! "$VENV_DIR/bin/python" -m bot_factories.admin_bot.set_webhook; then
+    if [[ $was_polling == true ]]; then
+        systemctl start "$OLD_ADMIN_SERVICE_NAME"
+    fi
+    die "admin webhook registration failed"
+fi
+if [[ -f "/etc/systemd/system/$OLD_ADMIN_SERVICE_NAME.service" ]]; then
+    systemctl disable "$OLD_ADMIN_SERVICE_NAME"
+fi
 available_kib="$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)"
 if [[ $available_kib -lt 262144 ]]; then
     echo "WARNING: only $((available_kib / 1024)) MiB RAM is available; monitor memory and swap." >&2
 fi
-echo "Gateway and admin bot worker are running. SQLite is stored in /var/lib/tgbot-admin."
+echo "Gateway and admin webhook are running. SQLite is stored in /var/lib/tgbot-admin."

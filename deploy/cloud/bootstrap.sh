@@ -70,7 +70,8 @@ for line in Path(sys.argv[1]).read_text().splitlines():
     values[key.strip()] = value.strip().strip("\"'")
 for key in ('REDIS_HOST', 'REDIS_PORT', 'REDIS_PASSWORD',
             'WEBHOOK_SECRET_TOKEN', 'TELEGRAM_TASK_NAME', 'TELEGRAM_QUEUE',
-            'ADMIN_BOT_TOKEN', 'ADMIN_BOT_OWNER_ID'):
+            'ADMIN_BOT_TOKEN', 'ADMIN_BOT_OWNER_ID',
+            'ADMIN_BOT_PUBLIC_BASE_URL', 'ADMIN_BOT_WEBHOOK_SECRET'):
     if not values.get(key):
         raise SystemExit(f'Error: {key} is missing from .env')
 if not values['ADMIN_BOT_OWNER_ID'].isdigit() or int(values['ADMIN_BOT_OWNER_ID']) <= 0:
@@ -92,8 +93,7 @@ path.write_text('\n'.join(kept + [f'{key} {value}' for key, value in settings.it
 PY
 systemctl enable --now redis-server
 systemctl restart redis-server
-
-bash "$PROJECT_DIR/deploy/cloud/install.sh"
+systemctl enable --now nginx
 
 # Certbot retains its generated HTTPS configuration on subsequent runs.
 if [[ ! -f /etc/letsencrypt/live/$DOMAIN/fullchain.pem ]]; then
@@ -128,6 +128,8 @@ PY
     fi
     certbot "${certbot_args[@]}"
 fi
+
+bash "$PROJECT_DIR/deploy/cloud/install.sh"
 
 curl --fail --silent --show-error --max-time 15 \
     "https://$DOMAIN/openapi.json" >/dev/null

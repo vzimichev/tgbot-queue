@@ -10,9 +10,13 @@ User=tgbot-gateway
 Group=tgbot-gateway
 WorkingDirectory=@PROJECT_DIR@
 EnvironmentFile=@PROJECT_DIR@/.env
+Environment=ADMIN_BOT_DATA_DIR=/var/lib/tgbot-admin
 ExecStart=@VENV_DIR@/bin/uvicorn api.main:app --host 127.0.0.1 --port 8000 --workers 1
 Restart=on-failure
 RestartSec=5
+StateDirectory=tgbot-admin
+StateDirectoryMode=0700
+UMask=0077
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

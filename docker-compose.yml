@@ -6,25 +6,15 @@ services:
     container_name: telegram_gateway
     restart: unless-stopped
     env_file: .env
+    environment:
+      ADMIN_BOT_DATA_DIR: /var/lib/tgbot-admin
     ports:
       - "8000:8000"
+    volumes:
+      - admin_bot_data:/var/lib/tgbot-admin
     depends_on:
       redis:
         condition: service_healthy
-
-  admin_bot_worker:
-    build:
-      context: .
-      dockerfile: api.Dockerfile
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      ADMIN_BOT_DATA_DIR: /var/lib/tgbot-admin
-    command: ["python", "-m", "bot_factories.admin_bot.polling"]
-    volumes:
-      - admin_bot_data:/var/lib/tgbot-admin
-    mem_limit: 160m
-
 
   redis:
     image: redis:7
