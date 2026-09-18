@@ -10,13 +10,8 @@ die() { echo "Error: $*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "run with sudo or as root"
 [[ -f "$PROJECT_DIR/.env" ]] || die "$PROJECT_DIR/.env is missing"
-if command -v python3.14 >/dev/null; then
-    PYTHON_BIN=python3.14
-elif command -v python3.13 >/dev/null; then
-    PYTHON_BIN=python3.13
-else
-    die "Python 3.13 or 3.14 is required"
-fi
+command -v python3.13 >/dev/null || die "Python 3.13 is required by the current lock file"
+PYTHON_BIN=python3.13
 for command_name in poetry redis-cli nginx systemctl curl useradd; do
     command -v "$command_name" >/dev/null || die "$command_name is required"
 done

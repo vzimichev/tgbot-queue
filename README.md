@@ -105,9 +105,10 @@ not start a Celery worker or create an HTTPS certificate. Run a worker that
 consumes `TELEGRAM_QUEUE` wherever its processing resources are available.
 Existing bot worker services are left untouched.
 
-The script selects Python 3.14 or 3.13, both allowed by the project's
-`^3.13` requirement. Ubuntu 24.04 has Python 3.12 by default and requires a
-separate Python installation.
+The script prefers Python 3.13 when available. Although the project's `^3.13`
+requirement also allows Python 3.14, some pinned dependencies in `poetry.lock`
+do not provide Python 3.14 wheels. Install Python 3.13 alongside Ubuntu 26.04
+before deploying with this lock file. Ubuntu 24.04 has Python 3.12 by default.
 
 ### With Docker
 
