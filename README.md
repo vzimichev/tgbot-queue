@@ -188,3 +188,43 @@ RUN_FACESWAP_INTEGRATION=1 .venv/bin/pytest bot_factories/faceswap_bot/tests/tes
 ## License
 
 MIT
+
+## Admin bot factory
+
+Standalone admin bot with polling and SQLite. Start from the project directory:
+
+```sh
+./bot_factories/admin_bot/start_bot.sh
+```
+
+Requires project dependencies in `.venv` or Poetry, and `ADMIN_BOT_TOKEN` and
+`ADMIN_BOT_OWNER_ID` in the project `.env`. Bot Management Mode must be enabled
+in BotFather. No Docker, Redis or public gateway is required. The launcher
+switches the admin bot from webhook delivery to polling without dropping pending
+updates. `ADMIN_BOT_PUBLIC_BASE_URL` and `ADMIN_BOT_WEBHOOK_SECRET` are unused in
+this mode. Stop with Ctrl+C.
+
+Use **Создать бота** or `/create`, select the recipient using the Telegram user picker and enter
+the budget in seconds, then press the creation keyboard button and confirm in Telegram. The button uses
+`request_managed_bot` with `suggested_name` and `suggested_username`. Keep the generated
+username to associate the creation event with its parameters. `/bots` lists
+saved bots; `/cancel` cancels input, not previously issued creation links.
+Before issuing a creation request, the admin bot checks for a saved bot or a
+pending creation for the recipient. Selecting the same recipient again shows the
+existing bot or repeats the pending request with its original username and budget.
+`/access` also prevents assigning a second bot to that recipient.
+
+Tokens, parameters and polling position persist in
+`bot_factories/admin_bot/.cache/admin.sqlite3` (excluded from Git). This file
+contains credentials; keep it private. The admin bot restricts access using `setManagedBotAccessSettings`, allowing the
+selected recipient and the owner. Child bots have no handlers or budget deductions.
+For previously created bots use `/access <bot ID>` and select the recipient;
+`/bots` shows this command and whether access has been configured.
+
+Telegram flow: https://core.telegram.org/bots/features#managed-bots
+
+After access is configured, **Открыть чат с получателем** opens the assigned
+recipient's username chat with a draft containing the bot link, name and budget.
+The owner only needs to send it. The same button is available in `/bots`.
+If the recipient has no username, Telegram cannot prefill a draft via a user-ID
+link: separate buttons copy the invitation and open the recipient's profile.
