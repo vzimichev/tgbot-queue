@@ -1,0 +1,12 @@
+.git
+.venv
+.env
+.idea
+.pytest_cache
+.hypothesis
+**/__pycache__
+*.pyc
+**/.cache
+bot_factories/*/tests/data
+deploy/docker/certbot-webroot
+deploy/docker/nginx.active.conf

@@ -64,10 +64,10 @@ Celery worker.
 
 ## Configuration
 
-Create `.env` in project root:
+The project root `.env` contains gateway credentials only. Start from
+`.env.example`:
 
 ``` env
-TELEGRAM_TOKEN=123456:ABC
 WEBHOOK_SECRET_TOKEN=super-secret
 
 REDIS_HOST=redis
@@ -81,6 +81,32 @@ TELEGRAM_REQUEST_TIMEOUT=600
 ```
 
 All variables are loaded via `shared/config.py`.
+
+Local bot credentials belong in separate, ignored files:
+
+| File | Used by |
+| --- | --- |
+| `.env.echo` (or one file per echo bot) | Echo Celery worker and its SSH tunnel |
+| `.env.faceswap` | FaceSwap worker, SSH tunnel, and local FaceFusion API |
+
+Copy the matching `.env.*.example` file and fill in its credentials. Each
+launcher loads its own file. To run two echo bots, copy `.env.echo.example` to
+`.env.echo1` and `.env.echo2`. Give them separate Telegram tokens, task names,
+queues and local Redis ports. For example, use `echo1.process_telegram_update`
+with queue `echo1` and local port 6379 in the first file; use
+`echo2.process_telegram_update` with queue `echo2` and local port 6381 in the
+second. FaceSwap uses local port 6380 by default. Start the workers in separate
+terminals:
+
+```bash
+./bot_factories/echo_bot/start_worker.sh .env.echo1
+./bot_factories/echo_bot/start_worker.sh .env.echo2
+./bot_factories/faceswap_bot/start_worker.sh
+```
+
+Each bot needs its own gateway deployment and webhook. Set
+`TELEGRAM_TASK_NAME` and `TELEGRAM_QUEUE` in that deployment's `.env` to match
+the worker's env file. The Compose file runs one gateway deployment.
 
 ## Running the Cloud Gateway
 
@@ -119,16 +145,20 @@ The lock file includes wheels for both. Ubuntu 24.04 has Python 3.12 by default.
 
 ### With Docker
 
-Start all cloud-side services:
-``` bash
-docker compose up -d --build
+On a fresh Ubuntu server, copy the project to `/opt/tgbot-queue` and create a
+private `.env` there with `WEBHOOK_SECRET_TOKEN`, `REDIS_PASSWORD`,
+`REDIS_HOST=redis`, `REDIS_PORT=6379`, `TELEGRAM_TASK_NAME`, and
+`TELEGRAM_QUEUE`. Point the domain at the server, then run:
+
+```bash
+sudo bash deploy/docker/install.sh your-domain.example
 ```
 
-This starts:
-
-- **gateway**: FastAPI server receiving Telegram webhook calls
-- **redis**: Message broker
-- **flower**: Celery monitoring UI
+The installer adds swap on small VMs, installs Docker and Certbot, starts the
+FastAPI gateway, Redis, and Nginx, and obtains a Let's Encrypt certificate.
+Certificate renewal reloads Nginx automatically. Redis is exposed only on the
+server's loopback interface for the local worker's SSH tunnel. The gateway uses
+Celery to publish tasks to Redis; the bot worker runs on your own machine.
 
 View logs:
 
@@ -136,10 +166,10 @@ View logs:
 docker compose logs -f
 ```
 
-Stop and remove containers + volumes:
+Stop containers without deleting Redis data:
 
 ``` bash
-docker compose down -v
+docker compose down
 ```
 
 ## Running the Worker
@@ -147,9 +177,11 @@ docker compose down -v
 Run your local worker that contains the **aiogram bot handlers** and executes heavy processing:
 
 ``` bash
-bot_factories/echo_bot/start_worker.sh
+./bot_factories/echo_bot/start_worker.sh
 ```
-This lets you run AI-heavy tasks (audio/video processing, image generation, etc.) locally, while the cloud instance only receives webhooks.
+The echo launcher loads its selected env file, opens an SSH tunnel to the
+server's Redis, and starts the Celery worker. Stop it with Ctrl+C. The cloud
+instance receives webhooks and publishes tasks to the configured queue.
 
 ## Setting the Telegram Webhook
 

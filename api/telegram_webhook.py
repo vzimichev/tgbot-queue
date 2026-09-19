@@ -1,4 +1,3 @@
-import json
 import logging
 from typing import Any, Optional
 
@@ -29,13 +28,8 @@ async def telegram_webhook(
         settings.webhook_secret_token
         and telegram_secret_token != settings.webhook_secret_token
     ):
-        logger.warning(
-            "Forbidden request with invalid secret token: %s", telegram_secret_token
-        )
+        logger.warning("Forbidden webhook request with invalid secret token")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
-
-    # Log incoming request
-    logger.info("Incoming webhook body: %s", json.dumps(body))
 
     # Send the JSON to Celery
     celery_app.send_task(
