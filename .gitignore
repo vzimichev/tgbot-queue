@@ -8,6 +8,9 @@
 
 # Local environment files
 .env
+.env.*
+!.env.example
+!.env.*.example
 
 # Python cache
 __pycache__/
@@ -21,3 +24,6 @@ __pycache__/
 
 # Bot-local integration-test data and generated results
 /bot_factories/*/tests/data/
+
+/deploy/docker/nginx.active.conf
+/deploy/docker/certbot-webroot/

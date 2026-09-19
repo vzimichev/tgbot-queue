@@ -23,3 +23,6 @@ package-mode = false
 [tool.poetry.dev-dependencies]
 isort = "^7.0.0"
 black = "^25.11.0"
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
