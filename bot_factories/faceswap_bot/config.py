@@ -1,3 +1,5 @@
+import os
+
 from pydantic_settings import BaseSettings
 
 
@@ -11,4 +13,4 @@ class FaceSwapSettings(BaseSettings):
         extra = "ignore"
 
 
-faceswap_settings = FaceSwapSettings()
+faceswap_settings = FaceSwapSettings(_env_file=os.getenv("APP_ENV_FILE", ".env"))

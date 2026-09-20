@@ -4,7 +4,7 @@ from unittest.mock import patch
 from aiogram import Router
 
 from shared.config import settings
-from worker.celery_factory import CeleryFactory
+from worker.celery_factory import CeleryFactory, TELEGRAM_UPDATE_QUEUE, TELEGRAM_UPDATE_TASK
 
 
 class CeleryFactoryTest(unittest.TestCase):
@@ -14,21 +14,13 @@ class CeleryFactoryTest(unittest.TestCase):
         self.assertFalse(hasattr(app, "bot"))
         self.assertFalse(hasattr(app, "dp"))
 
-    def test_worker_registers_only_its_named_task_and_queue(self):
+    def test_worker_registers_shared_task_and_queue(self):
         with patch.object(settings, "telegram_token", "123456:ABCDEF"):
-            app = CeleryFactory.create_app(
-                router=Router(),
-                task_name="sample_bot.process_telegram_update",
-                queue_name="sample_bot",
-            )
+            app = CeleryFactory.create_app(router=Router())
 
-        self.assertIn("sample_bot.process_telegram_update", app.tasks)
-        self.assertEqual(app.conf.task_default_queue, "sample_bot")
+        self.assertIn(TELEGRAM_UPDATE_TASK, app.tasks)
+        self.assertEqual(app.conf.task_default_queue, TELEGRAM_UPDATE_QUEUE)
         self.assertEqual(app.bot.session.timeout, settings.telegram_request_timeout)
-
-    def test_worker_requires_explicit_routing(self):
-        with self.assertRaises(ValueError):
-            CeleryFactory.create_app(router=Router())
 
 
 if __name__ == "__main__":

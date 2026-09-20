@@ -69,7 +69,7 @@ for line in Path(sys.argv[1]).read_text().splitlines():
     key, value = line.split('=', 1)
     values[key.strip()] = value.strip().strip("\"'")
 for key in ('REDIS_HOST', 'REDIS_PORT', 'REDIS_PASSWORD',
-            'WEBHOOK_SECRET_TOKEN', 'TELEGRAM_TASK_NAME', 'TELEGRAM_QUEUE'):
+            'WEBHOOK_SECRET_TOKEN'):
     if not values.get(key):
         raise SystemExit(f'Error: {key} is missing from .env')
 if values['REDIS_HOST'] not in ('127.0.0.1', 'localhost'):
