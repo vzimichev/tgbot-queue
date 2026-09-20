@@ -253,12 +253,30 @@ class AdminTest(unittest.TestCase):
             return original(method, **kwargs)
 
         self.api.call.side_effect = fail
-        with self.assertRaises(RuntimeError):
-            self.select_user()
-        self.assertEqual(self.repo.get("bot:789")["access_status"], "pending")
-        self.api.call.side_effect = original
         self.select_user()
+        self.assertEqual(
+            self.repo.get("bot:789")["access_status"], "needs_recipient_start"
+        )
+        self.assertIsNone(self.repo.get("draft"))
+        self.assertIn("ID получателя: 456", self.api.call.call_args.kwargs["text"])
+        self.api.call.side_effect = original
+        self.message("/start", user=456, chat=456)
         self.assertEqual(self.repo.get("bot:789")["access_status"], "configured")
+
+    def test_unassigned_recipient_start_reports_actual_id(self):
+        self.repo.put(
+            "bot:789",
+            {
+                "bot_id": 789,
+                "username": "child_bot",
+                "recipient_id": 456,
+                "remaining_seconds": 600,
+            },
+        )
+        self.message("/start", user=457, chat=457)
+        self.api.call.assert_called_once()
+        self.assertEqual(self.api.call.call_args.kwargs["chat_id"], 457)
+        self.assertIn("457", self.api.call.call_args.kwargs["text"])
 
     def test_unconfirmed_access_waits_for_recipient_start(self):
         self.repo.put(

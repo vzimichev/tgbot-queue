@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import secrets
 from pathlib import Path
 from urllib.parse import quote, urlencode
@@ -9,6 +10,8 @@ from aiogram.types.managed_bot_updated import ManagedBotUpdated
 
 from bot_factories.admin_bot.config import get_admin_bot_settings
 from bot_factories.admin_bot.repository import Repository, TelegramAPI
+
+logger = logging.getLogger(__name__)
 
 
 class AdminService:
@@ -37,8 +40,10 @@ class AdminService:
                 else ""
             )
             if command == "/start":
+                matched = False
                 for bot in self.repo.list_bots():
                     if bot.get("recipient_id") == sender_id:
+                        matched = True
                         if self.grant_access(bot):
                             self.api.call(
                                 "sendMessage",
@@ -51,6 +56,16 @@ class AdminService:
                                 chat_id=sender_id,
                                 text="Доступ пока не удалось настроить. Попробуй /start ещё раз.",
                             )
+                if not matched and self.repo.list_bots():
+                    self.api.call(
+                        "sendMessage",
+                        chat_id=sender_id,
+                        text=(
+                            "Этот аккаунт не назначен получателем бота. "
+                            f"Твой Telegram ID: {sender_id}. "
+                            "Передай его владельцу, чтобы он проверил выбор пользователя."
+                        ),
+                    )
                 return
         if sender_id != self.owner or chat_id != self.owner:
             return
@@ -340,15 +355,25 @@ class AdminService:
             record["access_status"] = "needs_recipient"
             self.repo.put(f"bot:{record['bot_id']}", record)
             return False
-        self.api.call(
-            "setManagedBotAccessSettings",
-            user_id=record["bot_id"],
-            is_access_restricted=True,
-            added_user_ids=[record["recipient_id"]],
-        )
-        settings = self.api.call(
-            "getManagedBotAccessSettings", user_id=record["bot_id"]
-        )
+        try:
+            self.api.call(
+                "setManagedBotAccessSettings",
+                user_id=record["bot_id"],
+                is_access_restricted=True,
+                added_user_ids=[record["recipient_id"]],
+            )
+            settings = self.api.call(
+                "getManagedBotAccessSettings", user_id=record["bot_id"]
+            )
+        except RuntimeError:
+            logger.exception(
+                "Could not grant managed bot access: bot_id=%s recipient_id=%s",
+                record["bot_id"],
+                record["recipient_id"],
+            )
+            record["access_status"] = "needs_recipient_start"
+            self.repo.put(f"bot:{record['bot_id']}", record)
+            return False
         added_ids = {user["id"] for user in settings.get("added_users", [])}
         configured = (
             settings.get("is_access_restricted") is True
@@ -424,6 +449,7 @@ class AdminService:
     def describe(bot):
         return (
             f"https://t.me/{bot['username']}\nКому: {AdminService.recipient_label(bot)}\n"
+            f"ID получателя: {bot.get('recipient_id', 'не указан')}\n"
             f"Осталось: {bot['remaining_seconds']} секунд.\n"
             + (
                 "Доступ выдан выбранному пользователю и владельцу.\n"

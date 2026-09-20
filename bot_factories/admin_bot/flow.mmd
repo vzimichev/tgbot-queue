@@ -1,0 +1,52 @@
+flowchart LR
+    OWNER["Owner"]
+    RECIPIENT["Recipient"]
+
+    subgraph TELEGRAM["Telegram"]
+        TG_BOT["Admin bot chat"]
+        TG_UI["Recipient picker and bot creation UI"]
+        TG_EVENTS["message / users_shared / managed_bot updates"]
+        TG_API["Bot API: tokens and access settings"]
+        CHILD["Created bot"]
+    end
+
+    subgraph GATEWAY["Cloud API Gateway"]
+        WEBHOOK["POST /webhook"]
+        VALIDATE["Validate webhook secret"]
+        PUBLISH["Publish telegram.process_update"]
+    end
+
+    subgraph REDIS["Redis"]
+        QUEUE["telegram_updates queue"]
+    end
+
+    subgraph WORKER["Admin Worker"]
+        CELERY["Celery task"]
+        ROUTER["aiogram admin_router"]
+        DIALOG["Recipient and limit dialogue"]
+        REGISTER["Register managed bot"]
+        ACCESS["Set and verify recipient access"]
+        DB[("Local SQLite: drafts, bots, limits, tokens")]
+    end
+
+    OWNER -->|/create| TG_BOT
+    TG_BOT --> TG_EVENTS
+    TG_EVENTS --> WEBHOOK --> VALIDATE --> PUBLISH --> QUEUE --> CELERY --> ROUTER
+
+    ROUTER --> DIALOG
+    DIALOG <--> DB
+    DIALOG -->|request_users / request_managed_bot| TG_UI
+    OWNER -->|select recipient; confirm creation| TG_UI
+    TG_UI -->|users_shared / managed_bot| TG_EVENTS
+
+    ROUTER -->|managed_bot| REGISTER
+    REGISTER -->|getManagedBotToken| TG_API
+    REGISTER --> DB
+    REGISTER --> ACCESS
+    ACCESS -->|set and get access settings| TG_API
+    ACCESS --> DB
+    TG_API --> CHILD
+
+    ACCESS -->|invitation or retry instructions| TG_BOT
+    RECIPIENT -->|/start if access needs retry| TG_BOT
+    ROUTER -->|recipient /start| ACCESS
