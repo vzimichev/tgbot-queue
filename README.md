@@ -85,6 +85,7 @@ Local bot credentials belong in separate, ignored files:
 | --- | --- |
 | `bot_factories/echo_bot/.env` (or one file per echo bot) | Echo Celery worker and its SSH tunnel |
 | `bot_factories/faceswap_bot/.env` | FaceSwap worker, SSH tunnel, and local FaceFusion API |
+| `bot_factories/admin_bot/.env` | Admin Celery worker and its SSH tunnel |
 
 Copy the matching `.env.example` file in each bot directory and fill in its
 credentials. Each launcher loads its own file. To run two echo bots, copy
@@ -98,11 +99,35 @@ terminals:
 ./bot_factories/echo_bot/start_worker.sh bot_factories/echo_bot/.env.echo1
 ./bot_factories/echo_bot/start_worker.sh bot_factories/echo_bot/.env.echo2
 ./bot_factories/faceswap_bot/start_worker.sh
+./bot_factories/admin_bot/start_worker.sh
 ```
 
 Each bot needs its own gateway deployment, Redis broker, and webhook. The
 gateway publishes `telegram.process_update` to `telegram_updates`.
 The Compose file runs one gateway deployment.
+
+### Admin bot factory
+
+Copy `bot_factories/admin_bot/.env.example` to `bot_factories/admin_bot/.env`,
+set `ADMIN_BOT_TOKEN`, your numeric `ADMIN_BOT_OWNER_ID`, and the SSH/Redis
+settings for its gateway. Enable Bot Management Mode for the admin bot in
+BotFather. Set the admin bot's webhook to that gateway's `/webhook` endpoint
+with `allowed_updates=["message", "managed_bot"]`. The gateway publishes the
+usual `telegram.process_update` task to `telegram_updates`; the admin worker
+consumes it through its SSH tunnel. Give the admin bot a separate Redis broker
+from other bots because they use the same task name and queue.
+
+Run `./bot_factories/admin_bot/start_worker.sh`. In the admin bot's private
+chat, `/create` asks you to choose a Telegram user and enter a limit in seconds.
+Confirm managed bot creation yourself with the offered button and keep its
+suggested username. You remain its owner. The admin bot saves the token and
+limit, restricts access, and attempts to add the selected user. It reads back
+Telegram's access list before reporting that access was granted. If the user
+already has a saved bot or pending creation, `/create` asks how many seconds to
+**add** to its limit. `/bots` lists saved bots; `/access <bot ID>` retries access
+for an existing bot. Parameters and managed bot tokens are stored in
+`bot_factories/admin_bot/.cache/admin.sqlite3`.
+The generated bots have no handlers yet; the limit is stored but is not spent.
 
 ## Running the Cloud Gateway
 
