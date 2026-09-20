@@ -310,7 +310,7 @@ class AdminTest(unittest.TestCase):
         from urllib.parse import parse_qs, urlsplit
 
         invitation = parse_qs(urlsplit(button["url"]).query)["text"][0]
-        self.assertIn("t.me/manager_bot", invitation)
+        self.assertIn("t.me/manager_bot?start=activate_789", invitation)
         self.api.call.side_effect = original
         self.message("/start", user=456, chat=456)
         self.assertEqual(self.repo.get("bot:789")["access_status"], "configured")
@@ -318,6 +318,11 @@ class AdminTest(unittest.TestCase):
             "sendMessage",
             chat_id=456,
             text=self.service.invitation(self.repo.get("bot:789")),
+            reply_markup={
+                "inline_keyboard": [
+                    [{"text": "Открыть своего бота", "url": "https://t.me/child_bot"}]
+                ]
+            },
         )
 
     def test_invitation_targets_assigned_user(self):

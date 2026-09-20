@@ -49,6 +49,16 @@ class AdminService:
                                 "sendMessage",
                                 chat_id=sender_id,
                                 text=self.invitation(bot),
+                                reply_markup={
+                                    "inline_keyboard": [
+                                        [
+                                            {
+                                                "text": "Открыть своего бота",
+                                                "url": f"https://t.me/{bot['username']}",
+                                            }
+                                        ]
+                                    ]
+                                },
                             )
                         else:
                             self.api.call(
@@ -392,12 +402,21 @@ class AdminService:
             f"Бюджет: {bot.get('budget_seconds', bot['remaining_seconds'])} секунд видео.\n"
             f"https://t.me/{bot['username']}"
         )
-        if bot.get("access_status") != "configured" and bot.get("manager_username"):
+        activation_link = AdminService.activation_link(bot)
+        if bot.get("access_status") != "configured" and activation_link:
             invitation += (
-                f"\n\nСначала открой https://t.me/{bot['manager_username']} "
-                "и нажми Start. После подтверждения доступа открой выделенного бота."
+                f"\n\nЧтобы активировать доступ, открой {activation_link} "
+                "и нажми Start. Затем тебе придёт кнопка для открытия бота."
             )
         return invitation
+
+    @staticmethod
+    def activation_link(bot):
+        manager_username = bot.get("manager_username")
+        bot_id = bot.get("bot_id")
+        if manager_username and bot_id:
+            return f"https://t.me/{manager_username}?start=activate_{bot_id}"
+        return None
 
     @staticmethod
     def share_keyboard(bot):
@@ -455,8 +474,8 @@ class AdminService:
                 "Доступ выдан выбранному пользователю и владельцу.\n"
                 if bot.get("access_status") == "configured"
                 else (
-                    "Попроси пользователя открыть этот админ-бот и нажать Start; "
-                    "после этого доступ будет выдан автоматически.\n"
+                    "Отправь получателю приглашение. После перехода по ссылке "
+                    "и нажатия Start доступ будет выдан автоматически.\n"
                     if bot.get("access_status") == "needs_recipient_start"
                     else "Доступ ещё не настроен.\n"
                 )
