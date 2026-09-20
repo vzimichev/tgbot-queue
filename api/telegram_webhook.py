@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Any, Optional
 
@@ -6,7 +7,6 @@ from pydantic import BaseModel
 
 from shared.config import settings
 from worker.celery_app import celery_app
-from worker.celery_factory import TELEGRAM_UPDATE_QUEUE, TELEGRAM_UPDATE_TASK
 
 webhook_router = APIRouter()
 logger = logging.getLogger("telegram_webhook")
@@ -29,14 +29,19 @@ async def telegram_webhook(
         settings.webhook_secret_token
         and telegram_secret_token != settings.webhook_secret_token
     ):
-        logger.warning("Forbidden webhook request with invalid secret token")
+        logger.warning(
+            "Forbidden request with invalid secret token: %s", telegram_secret_token
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    # Log incoming request
+    logger.info("Incoming webhook body: %s", json.dumps(body))
 
     # Send the JSON to Celery
     celery_app.send_task(
-        TELEGRAM_UPDATE_TASK,
+        settings.telegram_task_name,
         args=[body],
-        queue=TELEGRAM_UPDATE_QUEUE,
+        queue=settings.telegram_queue,
     )
 
     logger.info("Task sent to Celery")
