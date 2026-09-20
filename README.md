@@ -100,9 +100,8 @@ terminals:
 ./bot_factories/faceswap_bot/start_worker.sh
 ```
 
-Each bot needs its own gateway deployment, Redis broker, and webhook. Set
-`TELEGRAM_TASK_NAME` and `TELEGRAM_QUEUE` in the gateway `.env` to match that
-bot's worker.
+Each bot needs its own gateway deployment, Redis broker, and webhook. The
+gateway publishes `telegram.process_update` to `telegram_updates`.
 The Compose file runs one gateway deployment.
 
 ## Running the Cloud Gateway

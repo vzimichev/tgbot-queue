@@ -14,8 +14,6 @@ class Settings(BaseSettings):
     redis_port: int = 6379
     redis_password: Optional[str] = None
 
-    telegram_task_name: str = "echo_bot.process_telegram_update"
-    telegram_queue: str = "echo_bot"
     telegram_request_timeout: float = 600.0
 
     class Config:
