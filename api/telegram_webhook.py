@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from shared.config import settings
 from worker.celery_app import celery_app
+from worker.celery_factory import TELEGRAM_UPDATE_QUEUE, TELEGRAM_UPDATE_TASK
 
 webhook_router = APIRouter()
 logger = logging.getLogger("telegram_webhook")
@@ -33,9 +34,9 @@ async def telegram_webhook(
 
     # Send the JSON to Celery
     celery_app.send_task(
-        settings.telegram_task_name,
+        TELEGRAM_UPDATE_TASK,
         args=[body],
-        queue=settings.telegram_queue,
+        queue=TELEGRAM_UPDATE_QUEUE,
     )
 
     logger.info("Task sent to Celery")

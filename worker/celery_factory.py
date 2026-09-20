@@ -9,14 +9,14 @@ from celery import Celery
 from shared.config import settings
 from worker.celery_tasks import register_default_telegram_task
 
+TELEGRAM_UPDATE_TASK = "telegram.process_update"
+TELEGRAM_UPDATE_QUEUE = "telegram_updates"
+
 
 class CeleryFactory:
     @staticmethod
     def create_app(
         router: Optional[Router] = None,
-        *,
-        task_name: Optional[str] = None,
-        queue_name: Optional[str] = None,
     ) -> Celery:
         celery_app = Celery(
             "worker",
@@ -37,10 +37,7 @@ class CeleryFactory:
         if router is None:
             return celery_app
 
-        if not task_name or not queue_name:
-            raise ValueError("Bot workers require task_name and queue_name")
-
-        celery_app.conf.task_default_queue = queue_name
+        celery_app.conf.task_default_queue = TELEGRAM_UPDATE_QUEUE
 
         bot = Bot(
             token=settings.telegram_token,
@@ -54,6 +51,6 @@ class CeleryFactory:
         celery_app.bot = bot
         celery_app.dp = dp
 
-        register_default_telegram_task(celery_app, task_name=task_name)
+        register_default_telegram_task(celery_app, task_name=TELEGRAM_UPDATE_TASK)
 
         return celery_app

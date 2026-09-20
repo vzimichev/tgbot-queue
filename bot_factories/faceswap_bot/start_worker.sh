@@ -19,9 +19,9 @@ cleanup() {
 trap cleanup EXIT INT TERM
 cd "$PROJECT_DIR"
 
-ENV_FILE="$PROJECT_DIR/.env.faceswap"
+ENV_FILE="$PROJECT_DIR/bot_factories/faceswap_bot/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
-    echo "Error: $ENV_FILE not found. Copy .env.faceswap.example and fill in credentials." >&2
+    echo "Error: $ENV_FILE not found. Copy bot_factories/faceswap_bot/.env.example and fill in credentials." >&2
     exit 1
 fi
 
@@ -31,15 +31,15 @@ source "$ENV_FILE"
 set +a
 export APP_ENV_FILE="$ENV_FILE"
 
-: "${SSH_HOST:?SSH_HOST is not set in .env.faceswap}"
-: "${SSH_REDIS_PORT:?SSH_REDIS_PORT is not set in .env.faceswap}"
-: "${REDIS_HOST:?REDIS_HOST is not set in .env.faceswap}"
-: "${REDIS_PORT:?REDIS_PORT is not set in .env.faceswap}"
-: "${REDIS_PASSWORD:?REDIS_PASSWORD is not set in .env.faceswap}"
-: "${TELEGRAM_TOKEN:?TELEGRAM_TOKEN is not set in .env.faceswap}"
-: "${FACESWAP_CLIENT_DIR:?FACESWAP_CLIENT_DIR is not set in .env.faceswap}"
-: "${FACESWAP_API_HOST:?FACESWAP_API_HOST is not set in .env.faceswap}"
-: "${FACESWAP_API_PORT:?FACESWAP_API_PORT is not set in .env.faceswap}"
+: "${SSH_HOST:?SSH_HOST is not set in the FaceSwap env file}"
+: "${SSH_REDIS_PORT:?SSH_REDIS_PORT is not set in the FaceSwap env file}"
+: "${REDIS_HOST:?REDIS_HOST is not set in the FaceSwap env file}"
+: "${REDIS_PORT:?REDIS_PORT is not set in the FaceSwap env file}"
+: "${REDIS_PASSWORD:?REDIS_PASSWORD is not set in the FaceSwap env file}"
+: "${TELEGRAM_TOKEN:?TELEGRAM_TOKEN is not set in the FaceSwap env file}"
+: "${FACESWAP_CLIENT_DIR:?FACESWAP_CLIENT_DIR is not set in the FaceSwap env file}"
+: "${FACESWAP_API_HOST:?FACESWAP_API_HOST is not set in the FaceSwap env file}"
+: "${FACESWAP_API_PORT:?FACESWAP_API_PORT is not set in the FaceSwap env file}"
 
 if [[ ! -x .venv/bin/celery ]]; then
     echo "Installing bot dependencies..."

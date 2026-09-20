@@ -75,9 +75,6 @@ REDIS_PORT=6379
 REDIS_PASSWORD=guest1
 
 # Select the task and queue belonging to the worker this gateway serves.
-TELEGRAM_TASK_NAME=echo_bot.process_telegram_update
-TELEGRAM_QUEUE=echo_bot
-TELEGRAM_REQUEST_TIMEOUT=600
 ```
 
 All variables are loaded via `shared/config.py`.
@@ -86,27 +83,27 @@ Local bot credentials belong in separate, ignored files:
 
 | File | Used by |
 | --- | --- |
-| `.env.echo` (or one file per echo bot) | Echo Celery worker and its SSH tunnel |
-| `.env.faceswap` | FaceSwap worker, SSH tunnel, and local FaceFusion API |
+| `bot_factories/echo_bot/.env` (or one file per echo bot) | Echo Celery worker and its SSH tunnel |
+| `bot_factories/faceswap_bot/.env` | FaceSwap worker, SSH tunnel, and local FaceFusion API |
 
-Copy the matching `.env.*.example` file and fill in its credentials. Each
-launcher loads its own file. To run two echo bots, copy `.env.echo.example` to
-`.env.echo1` and `.env.echo2`. Give them separate Telegram tokens, task names,
-queues and local Redis ports. For example, use `echo1.process_telegram_update`
-with queue `echo1` and local port 6379 in the first file; use
-`echo2.process_telegram_update` with queue `echo2` and local port 6381 in the
-second. FaceSwap uses local port 6380 by default. Start the workers in separate
+Copy the matching `.env.example` file in each bot directory and fill in its
+credentials. Each launcher loads its own file. To run two echo bots, copy
+`bot_factories/echo_bot/.env.example` to `bot_factories/echo_bot/.env.echo1` and
+`bot_factories/echo_bot/.env.echo2`. Give them separate Telegram tokens and
+local Redis ports. Each bot must use its own Redis broker so its worker only
+consumes that bot's updates. FaceSwap uses local port 6380 by default. Start the workers in separate
 terminals:
 
 ```bash
-./bot_factories/echo_bot/start_worker.sh .env.echo1
-./bot_factories/echo_bot/start_worker.sh .env.echo2
+./bot_factories/echo_bot/start_worker.sh bot_factories/echo_bot/.env.echo1
+./bot_factories/echo_bot/start_worker.sh bot_factories/echo_bot/.env.echo2
 ./bot_factories/faceswap_bot/start_worker.sh
 ```
 
-Each bot needs its own gateway deployment and webhook. Set
-`TELEGRAM_TASK_NAME` and `TELEGRAM_QUEUE` in that deployment's `.env` to match
-the worker's env file. The Compose file runs one gateway deployment.
+Each bot needs its own gateway deployment, Redis broker, and webhook. The
+gateway publishes the received JSON to the fixed `telegram_updates` queue as
+`telegram.process_update`; the worker registered for that broker handles it.
+The Compose file runs one gateway deployment.
 
 ## Running the Cloud Gateway
 
@@ -120,8 +117,6 @@ WEBHOOK_SECRET_TOKEN=replace-with-a-random-secret
 REDIS_HOST=127.0.0.1
 REDIS_PORT=6379
 REDIS_PASSWORD=replace-with-a-random-password
-TELEGRAM_TASK_NAME=faceswap_bot.process_telegram_update
-TELEGRAM_QUEUE=faceswap_bot
 ```
 
 Use a password made of letters, digits and common punctuation without spaces.
@@ -147,8 +142,7 @@ The lock file includes wheels for both. Ubuntu 24.04 has Python 3.12 by default.
 
 On a fresh Ubuntu server, copy the project to `/opt/tgbot-queue` and create a
 private `.env` there with `WEBHOOK_SECRET_TOKEN`, `REDIS_PASSWORD`,
-`REDIS_HOST=redis`, `REDIS_PORT=6379`, `TELEGRAM_TASK_NAME`, and
-`TELEGRAM_QUEUE`. Point the domain at the server, then run:
+`REDIS_HOST=redis`, and `REDIS_PORT=6379`. Point the domain at the server, then run:
 
 ```bash
 sudo bash deploy/docker/install.sh your-domain.example
@@ -181,7 +175,7 @@ Run your local worker that contains the **aiogram bot handlers** and executes he
 ```
 The echo launcher loads its selected env file, opens an SSH tunnel to the
 server's Redis, and starts the Celery worker. Stop it with Ctrl+C. The cloud
-instance receives webhooks and publishes tasks to the configured queue.
+instance receives webhooks and publishes updates to the shared queue.
 
 ## Setting the Telegram Webhook
 
@@ -204,8 +198,8 @@ To create a custom bot:
 
 1. Add a package inside `bot_factories/`.
 2. Keep its routes, service configuration, launch scripts, and specific tests in that package.
-3. Create a Celery app with a unique task name and queue name.
-4. Configure the gateway's `TELEGRAM_TASK_NAME` and `TELEGRAM_QUEUE` to match.
+3. Create a Celery app using `CeleryFactory.create_app(router=your_router)`.
+4. Give this bot its own gateway deployment and Redis broker.
 
 The shared gateway and worker modules contain no service-specific processing code.
 
