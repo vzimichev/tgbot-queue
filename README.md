@@ -117,8 +117,13 @@ usual `telegram.process_update` task to `telegram_updates`; the admin worker
 consumes it through its SSH tunnel. Give the admin bot a separate Redis broker
 from other bots because they use the same task name and queue.
 
-Run `./bot_factories/admin_bot/start_worker.sh`. In the admin bot's private
-chat, `/create` asks you to choose a Telegram user and enter a limit in seconds.
+The admin worker and its persistent SQLite database can also run in their own
+Docker Compose project while using the root gateway and Redis. See
+[`bot_factories/admin_bot/README.md`](bot_factories/admin_bot/README.md) for the
+startup instructions.
+
+Run `./bot_factories/admin_bot/start_worker.sh` for the local worker setup. In
+the admin bot's private chat, `/create` asks you to choose a Telegram user and enter a limit in seconds.
 Confirm managed bot creation yourself with the offered button and keep its
 suggested username. You remain its owner. The admin bot saves the token and
 limit, restricts access, and attempts to add the selected user. It reads back
