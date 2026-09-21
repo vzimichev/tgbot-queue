@@ -25,7 +25,8 @@ flowchart LR
         ROUTER["aiogram admin_router"]
         DIALOG["Recipient and limit dialogue"]
         REGISTER["Register managed bot"]
-        ACCESS["Set and verify recipient access"]
+        CLAIM["Poll unclaimed personal bots"]
+        ACCESS["Restrict access to claimant ID"]
         DB[("Local SQLite: drafts, bots, limits, tokens")]
     end
 
@@ -42,11 +43,13 @@ flowchart LR
     ROUTER -->|managed_bot| REGISTER
     REGISTER -->|getManagedBotToken| TG_API
     REGISTER --> DB
-    REGISTER --> ACCESS
+    REGISTER --> CLAIM
+    CLAIM -->|one-time link to personal bot| CHILD
+    RECIPIENT -->|/start claim_token| CHILD
+    CHILD -->|getUpdates| CLAIM
+    CLAIM --> ACCESS
     ACCESS -->|set and get access settings| TG_API
     ACCESS --> DB
     TG_API --> CHILD
 
-    ACCESS -->|invitation or retry instructions| TG_BOT
-    RECIPIENT -->|/start if access needs retry| TG_BOT
-    ROUTER -->|recipient /start| ACCESS
+    ACCESS -->|ready message| CHILD

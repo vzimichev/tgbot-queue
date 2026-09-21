@@ -126,8 +126,9 @@ Run `./bot_factories/admin_bot/start_worker.sh` for the local worker setup. In
 the admin bot's private chat, `/create` asks you to choose a Telegram user and enter a limit in seconds.
 Confirm managed bot creation yourself with the offered button and keep its
 suggested username. You remain its owner. The admin bot saves the token and
-limit, restricts access, and attempts to add the selected user. It reads back
-Telegram's access list before reporting that access was granted. If the user
+limit and creates a one-time link to the personal bot. When the recipient opens
+that link, the worker reads their real Telegram ID, restricts the bot to that
+account, and consumes the link. If the user
 already has a saved bot or pending creation, `/create` asks how many seconds to
 **add** to its limit. `/bots` lists saved bots; `/access <bot ID>` retries access
 for an existing bot. Parameters and managed bot tokens are stored in

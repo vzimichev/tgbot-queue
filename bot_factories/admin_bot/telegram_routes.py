@@ -34,12 +34,12 @@ class AdminService:
         chat_id = message.get("chat", {}).get("id")
         recipient_text = (message.get("text") or "").strip()
         if sender_id is not None and sender_id == chat_id and sender_id != self.owner:
-            command = (
-                recipient_text.split(maxsplit=1)[0].split("@")[0]
-                if recipient_text
-                else ""
-            )
+            parts = recipient_text.split(maxsplit=1)
+            command = parts[0].split("@")[0] if recipient_text else ""
             if command == "/start":
+                if len(parts) == 2 and parts[1].startswith("claim_"):
+                    self.claim_bot(message, parts[1][len("claim_") :])
+                    return
                 matched = False
                 for bot in self.repo.list_bots():
                     if bot.get("recipient_id") == sender_id:
@@ -323,13 +323,23 @@ class AdminService:
             "manager_username": self.api.call("getMe")["username"],
             "owner_id": self.owner,
         }
-        self.repo.put(key, record)
-        self.grant_access(record)
+        self.prepare_claim(record)
         self.repo.delete(pending_key)
         self.say(
             "Бот сохранён.\n" + self.describe(record),
             reply_markup=self.share_keyboard(record),
         )
+
+    def prepare_claim(self, record):
+        self.api.call(
+            "setManagedBotAccessSettings",
+            user_id=record["bot_id"],
+            is_access_restricted=False,
+        )
+        record["access_status"] = "awaiting_claim"
+        self.ensure_claim_token(record)
+        record.setdefault("claim_update_offset", 0)
+        self.repo.put(f"bot:{record['bot_id']}", record)
 
     def choose_recipient(self, bot_id=None):
         request_id = secrets.randbelow(2**31)
@@ -363,6 +373,7 @@ class AdminService:
         self.repo.put(f"bot:{record['bot_id']}", record)
         if not record.get("recipient_id"):
             record["access_status"] = "needs_recipient"
+            self.ensure_claim_token(record)
             self.repo.put(f"bot:{record['bot_id']}", record)
             return False
         try:
@@ -382,6 +393,7 @@ class AdminService:
                 record["recipient_id"],
             )
             record["access_status"] = "needs_recipient_start"
+            self.ensure_claim_token(record)
             self.repo.put(f"bot:{record['bot_id']}", record)
             return False
         added_ids = {user["id"] for user in settings.get("added_users", [])}
@@ -392,30 +404,133 @@ class AdminService:
         record["access_status"] = (
             "configured" if configured else "needs_recipient_start"
         )
+        if configured:
+            record.pop("claim_token", None)
+        else:
+            self.ensure_claim_token(record)
         self.repo.put(f"bot:{record['bot_id']}", record)
         return configured
 
     @staticmethod
+    def ensure_claim_token(record):
+        if not record.get("claim_token"):
+            record["claim_token"] = secrets.token_urlsafe(24)
+
+    def claim_bot(self, message, claim_token):
+        record = next(
+            (
+                bot
+                for bot in self.repo.list_bots()
+                if bot.get("claim_token")
+                and secrets.compare_digest(bot["claim_token"], claim_token)
+            ),
+            None,
+        )
+        sender = message.get("from", {})
+        sender_id = sender.get("id")
+        if not record or not isinstance(sender_id, int) or sender_id <= 0:
+            self.api.call(
+                "sendMessage",
+                chat_id=sender_id,
+                text="Ссылка недействительна или уже использована.",
+            )
+            return
+
+        record.update(
+            recipient_id=sender_id,
+            recipient_username=sender.get("username", ""),
+            recipient_name=sender.get("first_name", ""),
+        )
+        if not self.grant_access(record):
+            self.api.call(
+                "sendMessage",
+                chat_id=sender_id,
+                text="Не удалось активировать доступ. Попробуй ещё раз позже.",
+            )
+            return
+
+        self.api.call(
+            "sendMessage",
+            chat_id=sender_id,
+            text="Готово! Доступ активирован.",
+            reply_markup={
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "Открыть моего бота",
+                            "url": f"https://t.me/{record['username']}",
+                        }
+                    ]
+                ]
+            },
+        )
+
+    def claim_bot_from_child(self, record, message, child_api):
+        text = (message.get("text") or "").strip()
+        parts = text.split(maxsplit=1)
+        expected = record.get("claim_token")
+        supplied = (
+            parts[1][len("claim_") :]
+            if len(parts) == 2
+            and parts[0].split("@")[0] == "/start"
+            and parts[1].startswith("claim_")
+            else ""
+        )
+        sender = message.get("from", {})
+        sender_id = sender.get("id")
+        if (
+            not expected
+            or not supplied
+            or not isinstance(sender_id, int)
+            or sender_id <= 0
+            or not secrets.compare_digest(expected, supplied)
+        ):
+            if isinstance(sender_id, int) and sender_id > 0:
+                child_api.call(
+                    "sendMessage",
+                    chat_id=sender_id,
+                    text="Используй персональную ссылку, которую тебе отправили.",
+                )
+            return False
+
+        record.update(
+            recipient_id=sender_id,
+            recipient_username=sender.get("username", ""),
+            recipient_name=sender.get("first_name", ""),
+        )
+        if not self.grant_access(record):
+            child_api.call(
+                "sendMessage",
+                chat_id=sender_id,
+                text="Не удалось активировать доступ. Попробуй ещё раз позже.",
+            )
+            return False
+
+        child_api.call(
+            "sendMessage",
+            chat_id=sender_id,
+            text="Готово! Это твой персональный бот.",
+        )
+        return True
+
+    @staticmethod
     def invitation(bot):
+        activation_link = AdminService.activation_link(bot)
+        if bot.get("access_status") != "configured" and activation_link:
+            return "Ваш персональный бот готов.\n" f"Получить бота: {activation_link}"
         invitation = (
             f"Тебе выделен бот «{bot.get('name') or bot['username']}».\n"
             f"Бюджет: {bot.get('budget_seconds', bot['remaining_seconds'])} секунд видео.\n"
             f"https://t.me/{bot['username']}"
         )
-        activation_link = AdminService.activation_link(bot)
-        if bot.get("access_status") != "configured" and activation_link:
-            invitation += (
-                f"\n\nЧтобы активировать доступ, открой {activation_link} "
-                "и нажми Start. Затем тебе придёт кнопка для открытия бота."
-            )
         return invitation
 
     @staticmethod
     def activation_link(bot):
-        manager_username = bot.get("manager_username")
-        bot_id = bot.get("bot_id")
-        if manager_username and bot_id:
-            return f"https://t.me/{manager_username}?start=activate_{bot_id}"
+        username = bot.get("username")
+        claim_token = bot.get("claim_token")
+        if username and claim_token:
+            return f"https://t.me/{username}?start=claim_{claim_token}"
         return None
 
     @staticmethod
@@ -487,6 +602,50 @@ class AdminService:
 
 cache_folder = Path(__file__).parent / ".cache"
 admin_router = Router()
+
+
+def process_claim_updates() -> int:
+    """Poll unclaimed managed bots until their one-time link is used."""
+    settings = get_admin_bot_settings()
+    if not settings.token or settings.owner_id <= 0:
+        raise RuntimeError("ADMIN_BOT_TOKEN and ADMIN_BOT_OWNER_ID are required")
+
+    cache_folder.mkdir(mode=0o700, exist_ok=True)
+    repository = Repository(cache_folder / "admin.sqlite3")
+    processed = 0
+    try:
+        service = AdminService(
+            TelegramAPI(settings.token), repository, settings.owner_id
+        )
+        for record in repository.list_bots():
+            if record.get("access_status") != "awaiting_claim" or not record.get(
+                "claim_token"
+            ):
+                continue
+            child_api = TelegramAPI(record["token"])
+            try:
+                updates = child_api.call(
+                    "getUpdates",
+                    offset=record.get("claim_update_offset", 0),
+                    timeout=0,
+                    allowed_updates=["message"],
+                )
+            except RuntimeError:
+                logger.exception(
+                    "Could not poll claim updates: bot_id=%s", record["bot_id"]
+                )
+                continue
+
+            for update in updates:
+                record["claim_update_offset"] = update["update_id"] + 1
+                message = update.get("message")
+                if message:
+                    service.claim_bot_from_child(record, message, child_api)
+                processed += 1
+            repository.put(f"bot:{record['bot_id']}", record)
+    finally:
+        repository.db.close()
+    return processed
 
 
 def process_telegram_update(body: dict) -> None:

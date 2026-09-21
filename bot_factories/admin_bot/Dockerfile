@@ -16,4 +16,4 @@ COPY bot_factories/admin_bot ./bot_factories/admin_bot
 COPY shared ./shared
 COPY worker ./worker
 
-CMD ["celery", "-A", "bot_factories.admin_bot.celery_app", "worker", "--loglevel=info", "--concurrency=1", "--pool=solo"]
+CMD ["celery", "-A", "bot_factories.admin_bot.celery_app", "worker", "--beat", "--loglevel=info", "--concurrency=1", "--pool=solo"]

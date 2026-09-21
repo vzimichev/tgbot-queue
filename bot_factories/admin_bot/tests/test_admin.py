@@ -98,10 +98,11 @@ class AdminTest(unittest.TestCase):
         self.api.call.assert_any_call(
             "setManagedBotAccessSettings",
             user_id=789,
-            is_access_restricted=True,
-            added_user_ids=[456],
+            is_access_restricted=False,
         )
-        self.assertEqual(record["access_status"], "configured")
+        self.assertEqual(record["access_status"], "awaiting_claim")
+        self.assertTrue(record["claim_token"])
+        self.assertIn(f"t.me/{username}?start=claim_", self.service.invitation(record))
         self.assertEqual(record["owner_id"], 123)
         self.assertEqual(record["remaining_seconds"], 600)
         self.assertEqual(record["token"], "secret-token")
@@ -310,7 +311,9 @@ class AdminTest(unittest.TestCase):
         from urllib.parse import parse_qs, urlsplit
 
         invitation = parse_qs(urlsplit(button["url"]).query)["text"][0]
-        self.assertIn("t.me/manager_bot?start=activate_789", invitation)
+        self.assertIn("Ваш персональный бот готов", invitation)
+        self.assertIn("t.me/child_bot?start=claim_", invitation)
+        self.assertNotIn("activate_789", invitation)
         self.api.call.side_effect = original
         self.message("/start", user=456, chat=456)
         self.assertEqual(self.repo.get("bot:789")["access_status"], "configured")
@@ -323,6 +326,131 @@ class AdminTest(unittest.TestCase):
                     [{"text": "Открыть своего бота", "url": "https://t.me/child_bot"}]
                 ]
             },
+        )
+
+    def test_claim_link_assigns_actual_sender_once(self):
+        original = self.api.call.side_effect
+
+        def access_for_claimant(method, **kwargs):
+            if method == "getManagedBotAccessSettings":
+                return {
+                    "is_access_restricted": True,
+                    "added_users": [{"id": 457}],
+                }
+            return original(method, **kwargs)
+
+        self.api.call.side_effect = access_for_claimant
+        record = {
+            "bot_id": 789,
+            "username": "child_bot",
+            "manager_username": "manager_bot",
+            "recipient_id": 456,
+            "recipient_username": "selected_user",
+            "remaining_seconds": 600,
+            "access_status": "needs_recipient_start",
+            "claim_token": "one_time_token",
+        }
+        self.repo.put("bot:789", record)
+
+        self.service.handle(
+            {
+                "message": {
+                    "from": {
+                        "id": 457,
+                        "username": "actual_user",
+                        "first_name": "Bob",
+                    },
+                    "chat": {"id": 457},
+                    "text": "/start claim_one_time_token",
+                }
+            }
+        )
+
+        saved = self.repo.get("bot:789")
+        self.assertEqual(saved["recipient_id"], 457)
+        self.assertEqual(saved["recipient_username"], "actual_user")
+        self.assertEqual(saved["access_status"], "configured")
+        self.assertNotIn("claim_token", saved)
+        self.api.call.assert_any_call(
+            "setManagedBotAccessSettings",
+            user_id=789,
+            is_access_restricted=True,
+            added_user_ids=[457],
+        )
+        self.api.call.assert_any_call(
+            "sendMessage",
+            chat_id=457,
+            text="Готово! Доступ активирован.",
+            reply_markup={
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "Открыть моего бота",
+                            "url": "https://t.me/child_bot",
+                        }
+                    ]
+                ]
+            },
+        )
+
+        self.api.reset_mock()
+        self.message("/start claim_one_time_token", user=458, chat=458)
+        self.api.call.assert_called_once_with(
+            "sendMessage",
+            chat_id=458,
+            text="Ссылка недействительна или уже использована.",
+        )
+
+    def test_personal_bot_claim_restricts_access_to_actual_sender(self):
+        original = self.api.call.side_effect
+
+        def access_for_claimant(method, **kwargs):
+            if method == "getManagedBotAccessSettings":
+                return {
+                    "is_access_restricted": True,
+                    "added_users": [{"id": 457}],
+                }
+            return original(method, **kwargs)
+
+        self.api.call.side_effect = access_for_claimant
+        record = {
+            "bot_id": 789,
+            "username": "child_bot",
+            "token": "child-token",
+            "remaining_seconds": 600,
+            "access_status": "awaiting_claim",
+            "claim_token": "one_time_token",
+        }
+        self.repo.put("bot:789", record)
+        child_api = Mock()
+
+        claimed = self.service.claim_bot_from_child(
+            record,
+            {
+                "from": {
+                    "id": 457,
+                    "username": "actual_user",
+                    "first_name": "Bob",
+                },
+                "text": "/start claim_one_time_token",
+            },
+            child_api,
+        )
+
+        self.assertTrue(claimed)
+        self.assertEqual(record["recipient_id"], 457)
+        self.assertEqual(record["access_status"], "configured")
+        self.assertNotIn("claim_token", record)
+        self.api.call.assert_any_call(
+            "setManagedBotAccessSettings",
+            user_id=789,
+            is_access_restricted=True,
+            added_user_ids=[457],
+        )
+        child_api.call.assert_called_once_with(
+            "sendMessage",
+            chat_id=457,
+            text="Готово! Это твой персональный бот.",
         )
 
     def test_invitation_targets_assigned_user(self):
