@@ -226,6 +226,9 @@ class AdminTest(unittest.TestCase):
         )
         self.message("Создать бота / добавить лимит")
         self.select_user()
+        self.assertEqual(self.repo.get("bot:789")["remaining_seconds"], 600)
+        self.assertIn("https://t.me/child_bot", self.api.call.call_args.kwargs["text"])
+        self.message("Добавить лимит")
         self.assertEqual(self.draft(), {"step": "add_limit", "bot_id": 789})
         self.message("250")
         self.assertIsNone(self.draft())
@@ -235,6 +238,28 @@ class AdminTest(unittest.TestCase):
         self.assertEqual(record["budget_seconds"], 850)
         self.assertIn("850", self.api.call.call_args.kwargs["text"])
 
+    def test_existing_unclaimed_bot_shows_same_link_without_changing_budget(self):
+        record = {
+            "bot_id": 789,
+            "username": "child_bot",
+            "recipient_id": 456,
+            "remaining_seconds": 600,
+            "access_status": "awaiting_claim",
+            "claim_token": "original-token",
+        }
+        self.repo.put("bot:789", record.copy())
+        self.message("Создать бота / добавить лимит")
+        self.select_user()
+        self.assertIn(
+            "https://t.me/child_bot?start=claim_original-token",
+            self.api.call.call_args.kwargs["text"],
+        )
+        self.message("250")
+        self.assertEqual(self.repo.get("bot:789"), record)
+        self.assertEqual(self.repo.list_pending(), [])
+        self.message("Отмена")
+        self.assertIsNone(self.draft())
+
     def test_pending_creation_adds_limit_to_same_username(self):
         self.message("Создать бота / добавить лимит")
         self.select_user()
@@ -242,6 +267,7 @@ class AdminTest(unittest.TestCase):
         pending = self.repo.list_pending()[0]
         self.message("Создать бота / добавить лимит")
         self.select_user()
+        self.message("Добавить лимит")
         self.assertEqual(self.draft()["step"], "add_limit")
         self.message("200")
         self.assertIsNone(self.draft())
@@ -266,6 +292,7 @@ class AdminTest(unittest.TestCase):
         )
         self.message("Создать бота / добавить лимит")
         self.select_user()
+        self.message("Добавить лимит")
         for value in ("0", "-1", "abc", "2"):
             self.message(value)
             self.assertEqual(self.draft()["step"], "add_limit")
@@ -719,6 +746,7 @@ class AdminTest(unittest.TestCase):
         self.assertIsNone(self.draft())
         self.message("Создать бота / добавить лимит")
         self.select_user()
+        self.message("Добавить лимит")
         self.message("100")
         self.assertEqual(len(self.repo.list_pending()), 1)
         self.assertEqual(self.repo.list_pending()[0]["username"], pending["username"])

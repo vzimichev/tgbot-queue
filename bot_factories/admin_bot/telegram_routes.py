@@ -17,6 +17,7 @@ admin_router = Router()
 class Creation(StatesGroup):
     recipient = State()
     seconds = State()
+    selected = State()
     add_limit = State()
 
 
@@ -136,7 +137,7 @@ def describe(bot):
     )
 
 
-async def send_creation_request(message, pending):
+async def send_creation_request(message, pending, include_limit=False):
     await answer(
         message,
         f"Название: {pending['name']}\nUsername: @{pending['username']}\n"
@@ -156,6 +157,7 @@ async def send_creation_request(message, pending):
                         },
                     }
                 ],
+                *([[{"text": "Добавить лимит"}]] if include_limit else []),
                 [{"text": "Отмена"}],
             ],
             "resize_keyboard": True,
@@ -319,11 +321,16 @@ async def select_recipient(message: Message, state: FSMContext):
             else f"pending:{pending['username']}"
         )
         await state.set_data({"key": key})
-        await state.set_state(Creation.add_limit)
-        text = "Бот уже создан." if existing else "Создание бота уже начато."
-        await answer(
-            message, text + " Сколько секунд добавить к лимиту?", cancel_keyboard()
-        )
+        await state.set_state(Creation.selected)
+        if existing:
+            await answer(
+                message,
+                "Бот уже создан. Вот ссылка для получателя.",
+                selected_keyboard(),
+            )
+            await answer(message, invitation(existing), share_keyboard(existing))
+        else:
+            await send_creation_request(message, pending, include_limit=True)
     else:
         await state.set_data(recipient)
         await state.set_state(Creation.seconds)
@@ -332,6 +339,28 @@ async def select_recipient(message: Message, state: FSMContext):
             "Как долго? Отправь бюджет в секундах, например 600.",
             cancel_keyboard(),
         )
+
+
+def selected_keyboard():
+    return {
+        "keyboard": [[{"text": "Добавить лимит"}], [{"text": "Отмена"}]],
+        "resize_keyboard": True,
+    }
+
+
+@admin_router.message(Owner(), Creation.selected, F.text == "Добавить лимит")
+async def request_limit(message: Message, state: FSMContext):
+    await state.set_state(Creation.add_limit)
+    await answer(message, "Сколько секунд добавить к лимиту?", cancel_keyboard())
+
+
+@admin_router.message(Owner(), Creation.selected, F.text)
+async def waiting_for_action(message: Message):
+    await answer(
+        message,
+        "Ссылка уже показана выше. Чтобы изменить лимит, нажми «Добавить лимит».",
+        selected_keyboard(),
+    )
 
 
 @admin_router.message(Owner(), F.managed_bot_created)

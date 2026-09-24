@@ -129,8 +129,9 @@ suggested username. You remain its owner. The admin bot saves the token and
 limit and creates a one-time link to the personal bot. When the recipient opens
 that link, the worker reads their real Telegram ID, restricts the bot to that
 account, and consumes the link. If the user
-already has a saved bot or pending creation, the **Создать бота / добавить лимит** button asks how many seconds to
-**add** to its limit. **Мои боты** lists saved bots and invitations. Parameters and managed bot tokens are stored in
+already has a saved bot, selecting them shows the existing invitation (or the
+ordinary bot link after activation). For a pending creation, it shows the
+creation button again. **Добавить лимит** separately starts budget input. **Мои боты** lists saved bots and invitations. Parameters and managed bot tokens are stored in
 `bot_factories/admin_bot/.cache/admin.sqlite3`.
 The generated bots have no handlers yet; the limit is stored but is not spent.
 
