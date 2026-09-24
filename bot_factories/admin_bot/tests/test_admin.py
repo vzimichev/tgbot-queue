@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 
-from bot_factories.admin_bot.telegram_routes import AdminService
+from bot_factories.admin_bot.telegram_routes import AdminService, notify_child_claim
 
 
 class MemoryRepository:
@@ -38,6 +38,11 @@ class AdminTest(unittest.TestCase):
             },
         }.get(method, True)
         self.service = AdminService(self.api, self.repo, 123)
+
+    def claim_from_child(self, record, message, child_api):
+        result = self.service.bots.claim_from_message(record, message)
+        notify_child_claim(message, child_api, result)
+        return result == "configured"
 
     def message(self, text, user=123, chat=123):
         self.service.handle(
@@ -221,16 +226,124 @@ class AdminTest(unittest.TestCase):
             return original(method, **kwargs)
 
         self.api.call.side_effect = fail
-        self.assertFalse(self.service.claim_bot_from_child(record, message, child_api))
+        self.assertFalse(self.claim_from_child(record, message, child_api))
         self.assertEqual(record["access_status"], "needs_recipient_start")
         self.assertEqual(record["claim_token"], "one_time_token")
         self.assertIn("Не удалось", child_api.call.call_args.kwargs["text"])
         self.api.call.side_effect = original
-        self.assertTrue(self.service.claim_bot_from_child(record, message, child_api))
+        self.assertTrue(self.claim_from_child(record, message, child_api))
         self.assertEqual(record["access_status"], "configured")
         self.assertEqual(record["recipient_id"], 456)
         self.assertEqual(record["recipient_username"], "")
         self.assertNotIn("claim_token", record)
+
+    def test_registration_preserves_existing_access_and_claim_state(self):
+        for status in ("configured", "awaiting_claim", "needs_recipient_start"):
+            with self.subTest(status=status):
+                record = {
+                    "bot_id": 789,
+                    "username": "child_bot",
+                    "name": "Child",
+                    "token": "old-token",
+                    "recipient_id": 456,
+                    "remaining_seconds": 600,
+                    "access_status": status,
+                    "claim_update_offset": 42,
+                }
+                if status != "configured":
+                    record["claim_token"] = "existing-link"
+                self.repo.put("bot:789", record)
+                self.api.reset_mock()
+                self.service.register(
+                    {"id": 789, "username": "renamed_bot", "first_name": "New name"}
+                )
+                saved = self.repo.get("bot:789")
+                for field in (
+                    "recipient_id",
+                    "remaining_seconds",
+                    "access_status",
+                    "claim_update_offset",
+                    "claim_token",
+                ):
+                    self.assertEqual(saved.get(field), record.get(field))
+                self.assertEqual(saved["token"], "secret-token")
+                self.assertEqual(saved["username"], "renamed_bot")
+                self.assertFalse(
+                    any(
+                        c.args[0] == "setManagedBotAccessSettings"
+                        for c in self.api.call.call_args_list
+                    )
+                )
+
+    def test_polling_retries_failed_claim_and_stops_after_success(self):
+        import tempfile
+        from types import SimpleNamespace
+        from pathlib import Path
+        from bot_factories.admin_bot import repository as routes
+        from bot_factories.admin_bot.repository import Repository
+
+        with tempfile.TemporaryDirectory() as folder:
+            cache = Path(folder)
+            repo = Repository(cache / "admin.sqlite3")
+            repo.put(
+                "bot:789",
+                {
+                    "bot_id": 789,
+                    "username": "child_bot",
+                    "token": "child-token",
+                    "recipient_id": 999,
+                    "remaining_seconds": 600,
+                    "access_status": "awaiting_claim",
+                    "claim_token": "one_time_token",
+                },
+            )
+            child = Mock()
+            child.call.side_effect = lambda method, **kw: (
+                [
+                    {
+                        "update_id": kw["offset"],
+                        "message": {
+                            "from": {"id": 456},
+                            "text": "/start claim_one_time_token",
+                        },
+                    }
+                ]
+                if method == "getUpdates"
+                else True
+            )
+            original = self.api.call.side_effect
+
+            def fail(method, **kwargs):
+                if method == "setManagedBotAccessSettings":
+                    raise RuntimeError("unavailable")
+                return original(method, **kwargs)
+
+            with patch.object(routes, "cache_folder", cache), patch.object(
+                routes,
+                "get_admin_bot_settings",
+                return_value=SimpleNamespace(token="admin-token", owner_id=123),
+            ), patch.object(
+                routes,
+                "TelegramAPI",
+                side_effect=lambda token: child if token == "child-token" else self.api,
+            ):
+                self.api.call.side_effect = fail
+                self.assertEqual(routes.process_claim_updates(notify_child_claim), 1)
+                saved = repo.get("bot:789")
+                self.assertEqual(saved["access_status"], "needs_recipient_start")
+                self.assertEqual(saved["claim_token"], "one_time_token")
+                self.assertEqual(saved["claim_update_offset"], 1)
+                self.api.call.side_effect = original
+                self.assertEqual(routes.process_claim_updates(notify_child_claim), 1)
+                saved = repo.get("bot:789")
+                self.assertEqual(saved["access_status"], "configured")
+                self.assertEqual(saved["recipient_id"], 456)
+                self.assertEqual(saved["remaining_seconds"], 600)
+                self.assertNotIn("claim_token", saved)
+                child.reset_mock()
+                self.assertEqual(routes.process_claim_updates(notify_child_claim), 0)
+                child.call.assert_not_called()
+            repo.db.close()
 
     def test_unassigned_recipient_start_reports_actual_id(self):
         self.repo.put(
@@ -267,7 +380,7 @@ class AdminTest(unittest.TestCase):
             return original(method, **kwargs)
 
         self.api.call.side_effect = unavailable
-        self.assertFalse(self.service.grant_access(self.repo.get("bot:789")))
+        self.assertFalse(self.service.bots.grant_access(self.repo.get("bot:789")))
         self.assertEqual(
             self.repo.get("bot:789")["access_status"], "needs_recipient_start"
         )
@@ -392,7 +505,7 @@ class AdminTest(unittest.TestCase):
         self.repo.put("bot:789", record)
         child_api = Mock()
 
-        claimed = self.service.claim_bot_from_child(
+        claimed = self.claim_from_child(
             record,
             {
                 "from": {

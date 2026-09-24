@@ -73,6 +73,7 @@ echo "Starting admin worker. Press Ctrl+C to stop."
 .venv/bin/celery \
     -A bot_factories.admin_bot.celery_app \
     worker \
+    --beat \
     --loglevel=info \
     --concurrency=1 \
     --pool=solo
