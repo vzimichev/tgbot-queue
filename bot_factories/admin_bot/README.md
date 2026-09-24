@@ -47,8 +47,9 @@ Compose project uses another project name, set `GATEWAY_NETWORK` accordingly.
 
 ## Menu
 
-The main menu has **Выбрать пользователя** and **Все боты**. Selecting a user
-opens their card with the current status and available actions:
+The main menu has **Выбрать пользователя** and **Все боты**. The first button
+opens Telegram's user picker directly, without an intermediate prompt. Selecting
+a user opens their card with the current status and available actions:
 
 - No bot: **Создать бота** asks for the initial budget, then opens Telegram's
   creation confirmation.

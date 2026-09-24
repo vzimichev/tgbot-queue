@@ -12,10 +12,10 @@ from bot_factories.admin_bot.config import get_admin_bot_settings
 from bot_factories.admin_bot.repository import run_bot_operation
 
 admin_router = Router()
+RECIPIENT_REQUEST_ID = 1
 
 
 class Creation(StatesGroup):
-    recipient = State()
     card = State()
     seconds = State()
     add_limit = State()
@@ -42,7 +42,18 @@ async def answer(message, text, reply_markup=None):
 def main_keyboard():
     return {
         "keyboard": [
-            [{"text": "Выбрать пользователя"}],
+            [
+                {
+                    "text": "Выбрать пользователя",
+                    "request_users": {
+                        "request_id": RECIPIENT_REQUEST_ID,
+                        "user_is_bot": False,
+                        "max_quantity": 1,
+                        "request_username": True,
+                        "request_name": True,
+                    },
+                }
+            ],
             [{"text": "Все боты"}],
         ],
         "resize_keyboard": True,
@@ -260,45 +271,10 @@ async def list_bots(message: Message, state: FSMContext):
         await answer(message, describe(record), share_keyboard(record))
 
 
-@admin_router.message(Owner(), F.text == "Выбрать пользователя")
-async def create(message: Message, state: FSMContext):
-    await state.clear()
-    request_id = secrets.randbelow(2**31)
-    await state.set_data({"request_id": request_id})
-    await state.set_state(Creation.recipient)
-    await answer(
-        message,
-        "Кому? Выбери пользователя в Telegram.",
-        {
-            "keyboard": [
-                [
-                    {
-                        "text": "Выбрать пользователя",
-                        "request_users": {
-                            "request_id": request_id,
-                            "user_is_bot": False,
-                            "max_quantity": 1,
-                            "request_username": True,
-                            "request_name": True,
-                        },
-                    }
-                ],
-                [{"text": "Назад"}],
-            ],
-            "resize_keyboard": True,
-            "one_time_keyboard": True,
-        },
-    )
-
-
 @admin_router.message(Owner(), F.users_shared)
 async def select_recipient(message: Message, state: FSMContext):
-    data = await state.get_data()
     shared = message.users_shared
-    if (
-        await state.get_state() != Creation.recipient.state
-        or shared.request_id != data.get("request_id")
-    ):
+    if shared.request_id != RECIPIENT_REQUEST_ID:
         await answer(
             message,
             "Этот выбор устарел. Нажми «Выбрать пользователя», чтобы начать заново.",
@@ -454,11 +430,6 @@ async def budget(message: Message, state: FSMContext):
     await state.set_data({**data, "key": f"pending:{pending['username']}"})
     await state.set_state(Creation.card)
     await send_creation_request(message, pending)
-
-
-@admin_router.message(Owner(), Creation.recipient)
-async def waiting_for_recipient(message: Message):
-    await answer(message, "Нажми кнопку «Выбрать пользователя».")
 
 
 @admin_router.message(Owner())

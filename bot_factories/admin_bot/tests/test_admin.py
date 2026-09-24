@@ -128,7 +128,7 @@ class AdminTest(unittest.TestCase):
                         "request_id": (
                             request_id
                             if request_id is not None
-                            else self.draft()["request_id"]
+                            else routes.RECIPIENT_REQUEST_ID
                         ),
                         "users": [
                             {
@@ -200,7 +200,7 @@ class AdminTest(unittest.TestCase):
         self.message("Выбрать пользователя")
         for text in ("-1", "0", "bad name", "1.5", "²", str(2**53)):
             self.message(text)
-            self.assertEqual(self.draft()["step"], "recipient")
+            self.assertIsNone(self.draft())
         self.select_user()
         self.message("Создать бота")
         self.assertEqual(self.draft()["recipient_username"], "some_user")
@@ -215,7 +215,7 @@ class AdminTest(unittest.TestCase):
     def test_stale_selection_is_ignored(self):
         self.message("Выбрать пользователя")
         self.select_user(request_id=-1)
-        self.assertEqual(self.draft()["step"], "recipient")
+        self.assertIsNone(self.draft())
 
     def test_child_claim_failure_can_be_retried_without_username(self):
         record = {
@@ -659,7 +659,7 @@ class AdminTest(unittest.TestCase):
                 }
             )
             self.assertEqual(result, {"status": "ok"})
-            self.assertEqual(self.draft()["step"], "recipient")
+            self.assertIsNone(self.draft())
             self.select_user()
             self.message("Создать бота")
             self.message("600")
@@ -691,11 +691,32 @@ class AdminTest(unittest.TestCase):
         self.message("/start")
         self.assertIsNone(self.draft())
 
+    def test_main_menu_opens_picker_directly_without_dialogue(self):
+        self.message("/start")
+        markup = self.api.call.call_args.kwargs["reply_markup"]
+        request = markup["keyboard"][0][0]["request_users"]
+        self.assertEqual(request["request_id"], routes.RECIPIENT_REQUEST_ID)
+        self.assertEqual(request["max_quantity"], 1)
+        self.assertIsNone(self.draft())
+        self.api.reset_mock()
+        self.select_user(request_id=request["request_id"])
+        self.assertEqual(self.draft()["step"], "card")
+        self.assertIn("Бот ещё не создан", self.api.call.call_args.kwargs["text"])
+        self.assertFalse(
+            any(
+                "Кому?" in c.kwargs.get("text", "")
+                for c in self.api.call.call_args_list
+            )
+        )
+
     def test_card_new_pending_and_back(self):
         self.message("/start")
         self.assertEqual(
-            routes.main_keyboard()["keyboard"],
-            [[{"text": "Выбрать пользователя"}], [{"text": "Все боты"}]],
+            [
+                [button["text"] for button in row]
+                for row in routes.main_keyboard()["keyboard"]
+            ],
+            [["Выбрать пользователя"], ["Все боты"]],
         )
         self.message("Выбрать пользователя")
         self.select_user()
