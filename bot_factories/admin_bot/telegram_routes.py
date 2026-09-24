@@ -87,7 +87,7 @@ class AdminService:
                 or draft.get("step") != "recipient"
                 or shared.get("request_id") != draft.get("request_id")
             ):
-                self.say("Этот выбор устарел. Начни заново через /create или /access.")
+                self.say("Этот выбор устарел. Начни заново через /create.")
                 return
             users = shared.get("users", [])
             if (
@@ -103,58 +103,42 @@ class AdminService:
                 "recipient_username": user.get("username", ""),
                 "recipient_name": user.get("first_name", ""),
             }
-            if not draft.get("bot_id"):
-                existing = next(
-                    (
-                        bot
-                        for bot in self.repo.list_bots()
-                        if bot.get("recipient_id") == recipient["recipient_id"]
-                    ),
-                    None,
+            existing = next(
+                (
+                    bot
+                    for bot in self.repo.list_bots()
+                    if bot.get("recipient_id") == recipient["recipient_id"]
+                ),
+                None,
+            )
+            if existing:
+                self.repo.put(
+                    "draft", {"step": "add_limit", "bot_id": existing["bot_id"]}
                 )
-                if existing:
-                    self.repo.put(
-                        "draft", {"step": "add_limit", "bot_id": existing["bot_id"]}
-                    )
-                    self.say("Бот уже создан. Сколько секунд добавить к лимиту?")
-                    return
-                pending = next(
-                    (
-                        bot
-                        for bot in self.repo.list_pending()
-                        if bot.get("recipient_id") == recipient["recipient_id"]
-                    ),
-                    None,
-                )
-                if pending:
-                    self.repo.put(
-                        "draft",
-                        {"step": "add_limit", "pending_username": pending["username"]},
-                    )
-                    self.say(
-                        "Создание бота уже начато. Сколько секунд добавить к лимиту?"
-                    )
-                    return
-            if self.recipient_taken(recipient["recipient_id"], draft.get("bot_id")):
-                self.repo.delete("draft")
+                self.say("Бот уже создан. Сколько секунд добавить к лимиту?")
                 return
-            if draft.get("bot_id"):
-                record = self.repo.get(f"bot:{draft['bot_id']}")
-                record.update(recipient)
-                self.repo.put(f"bot:{draft['bot_id']}", record)
-                configured = self.grant_access(record)
-                self.say(
-                    ("Доступ настроен.\n" if configured else "Доступ ещё не выдан.\n")
-                    + self.describe(record),
-                    reply_markup=self.share_keyboard(record),
+            pending = next(
+                (
+                    bot
+                    for bot in self.repo.list_pending()
+                    if bot.get("recipient_id") == recipient["recipient_id"]
+                ),
+                None,
+            )
+            if pending:
+                self.repo.put(
+                    "draft",
+                    {"step": "add_limit", "pending_username": pending["username"]},
                 )
-                self.repo.delete("draft")
-            else:
-                self.repo.put("draft", {"step": "seconds", **recipient})
                 self.say(
-                    "Как долго? Отправь бюджет в секундах, например 600.",
-                    reply_markup={"remove_keyboard": True},
+                    "Создание бота уже начато. Сколько секунд добавить к лимиту?"
                 )
+                return
+            self.repo.put("draft", {"step": "seconds", **recipient})
+            self.say(
+                "Как долго? Отправь бюджет в секундах, например 600.",
+                reply_markup={"remove_keyboard": True},
+            )
             return
         # Telegram also sends a companion service message; managed_bot registers it.
         if message.get("managed_bot_created"):
@@ -164,7 +148,6 @@ class AdminService:
         if command in ("/start", "/help"):
             self.say(
                 "/create — создать бота или добавить лимит\n/bots — список ботов\n"
-                "/access <ID бота> — доступ к ранее созданному боту\n"
                 "/cancel — отменить ввод\nБюджет задаётся в секундах и не списывается.",
                 reply_markup={
                     "keyboard": [[{"text": "Создать бота"}]],
@@ -180,17 +163,6 @@ class AdminService:
         elif command == "/cancel":
             self.repo.delete("draft")
             self.say("Ввод отменён.")
-        elif command == "/access":
-            parts = text.split()
-            if (
-                len(parts) != 2
-                or not parts[1].isascii()
-                or not parts[1].isdigit()
-                or not self.repo.get(f"bot:{int(parts[1])}")
-            ):
-                self.say("Укажи ID сохранённого бота: /access <ID>. Список: /bots.")
-                return
-            self.choose_recipient(bot_id=int(parts[1]))
         elif command == "/create" or text == "Создать бота":
             self.choose_recipient()
         else:
@@ -259,11 +231,9 @@ class AdminService:
                 self.send_creation_request(pending)
                 self.repo.delete("draft")
 
-    def recipient_taken(self, recipient_id, current_bot_id=None):
+    def recipient_taken(self, recipient_id):
         for bot in self.repo.list_bots():
-            if bot.get("recipient_id") == recipient_id and (
-                current_bot_id is None or bot.get("bot_id") != current_bot_id
-            ):
+            if bot.get("recipient_id") == recipient_id:
                 self.say(
                     "Для этого пользователя бот уже создан.\n" + self.describe(bot),
                     reply_markup=self.share_keyboard(bot),
@@ -341,10 +311,10 @@ class AdminService:
         record.setdefault("claim_update_offset", 0)
         self.repo.put(f"bot:{record['bot_id']}", record)
 
-    def choose_recipient(self, bot_id=None):
+    def choose_recipient(self):
         request_id = secrets.randbelow(2**31)
         self.repo.put(
-            "draft", {"step": "recipient", "request_id": request_id, "bot_id": bot_id}
+            "draft", {"step": "recipient", "request_id": request_id}
         )
         self.say(
             "Кому? Выбери пользователя в Telegram.",
@@ -595,7 +565,6 @@ class AdminService:
                     else "Доступ ещё не настроен.\n"
                 )
             )
-            + f"Назначить доступ: /access {bot.get('bot_id', '')}\n"
             + "Бот пустой, обработчики не подключены."
         )
 

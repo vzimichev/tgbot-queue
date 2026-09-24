@@ -199,53 +199,20 @@ class AdminTest(unittest.TestCase):
         self.message("1")
         self.assertEqual(self.repo.get("bot:789")["remaining_seconds"], 2**52)
 
-    def test_access_cannot_assign_second_bot_to_same_recipient(self):
-        self.repo.put(
-            "bot:789",
-            {
-                "bot_id": 789,
-                "username": "first_bot",
-                "recipient_id": 456,
-                "remaining_seconds": 600,
-                "access_status": "configured",
-            },
-        )
-        self.repo.put(
-            "bot:790",
-            {"bot_id": 790, "username": "second_bot", "remaining_seconds": 600},
-        )
-        self.message("/access 790")
-        self.select_user()
-        self.assertIsNone(self.repo.get("bot:790").get("recipient_id"))
-        self.assertIsNone(self.repo.get("draft"))
-        self.assertFalse(
-            any(
-                call.args[0] == "setManagedBotAccessSettings"
-                for call in self.api.call.call_args_list
-            )
-        )
-
-    def test_existing_bot_can_get_access_without_username(self):
-        self.repo.put(
-            "bot:789",
-            {"bot_id": 789, "username": "child_bot", "remaining_seconds": 600},
-        )
-        self.message("/access 789")
-        self.select_user(username="")
-        self.api.call.assert_any_call(
-            "setManagedBotAccessSettings",
-            user_id=789,
-            is_access_restricted=True,
-            added_user_ids=[456],
-        )
-        self.assertEqual(self.repo.get("bot:789")["access_status"], "configured")
-
-    def test_access_failure_does_not_report_success(self):
-        self.repo.put(
-            "bot:789",
-            {"bot_id": 789, "username": "child_bot", "remaining_seconds": 600},
-        )
-        self.message("/access 789")
+    def test_child_claim_failure_can_be_retried_without_username(self):
+        record = {
+            "bot_id": 789,
+            "username": "child_bot",
+            "remaining_seconds": 600,
+            "access_status": "awaiting_claim",
+            "claim_token": "one_time_token",
+        }
+        self.repo.put("bot:789", record)
+        child_api = Mock()
+        message = {
+            "from": {"id": 456},
+            "text": "/start claim_one_time_token",
+        }
         original = self.api.call.side_effect
 
         def fail(method, **kwargs):
@@ -254,15 +221,16 @@ class AdminTest(unittest.TestCase):
             return original(method, **kwargs)
 
         self.api.call.side_effect = fail
-        self.select_user()
-        self.assertEqual(
-            self.repo.get("bot:789")["access_status"], "needs_recipient_start"
-        )
-        self.assertIsNone(self.repo.get("draft"))
-        self.assertIn("ID получателя: 456", self.api.call.call_args.kwargs["text"])
+        self.assertFalse(self.service.claim_bot_from_child(record, message, child_api))
+        self.assertEqual(record["access_status"], "needs_recipient_start")
+        self.assertEqual(record["claim_token"], "one_time_token")
+        self.assertIn("Не удалось", child_api.call.call_args.kwargs["text"])
         self.api.call.side_effect = original
-        self.message("/start", user=456, chat=456)
-        self.assertEqual(self.repo.get("bot:789")["access_status"], "configured")
+        self.assertTrue(self.service.claim_bot_from_child(record, message, child_api))
+        self.assertEqual(record["access_status"], "configured")
+        self.assertEqual(record["recipient_id"], 456)
+        self.assertEqual(record["recipient_username"], "")
+        self.assertNotIn("claim_token", record)
 
     def test_unassigned_recipient_start_reports_actual_id(self):
         self.repo.put(

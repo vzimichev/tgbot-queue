@@ -130,8 +130,7 @@ limit and creates a one-time link to the personal bot. When the recipient opens
 that link, the worker reads their real Telegram ID, restricts the bot to that
 account, and consumes the link. If the user
 already has a saved bot or pending creation, `/create` asks how many seconds to
-**add** to its limit. `/bots` lists saved bots; `/access <bot ID>` retries access
-for an existing bot. Parameters and managed bot tokens are stored in
+**add** to its limit. `/bots` lists saved bots and invitations. Parameters and managed bot tokens are stored in
 `bot_factories/admin_bot/.cache/admin.sqlite3`.
 The generated bots have no handlers yet; the limit is stored but is not spent.
 
