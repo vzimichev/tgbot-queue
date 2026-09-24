@@ -253,7 +253,7 @@ class AdminService:
                     "remaining_seconds": int(text),
                     "budget_seconds": int(text),
                     "username": username,
-                    "name": f"Personal {secrets.token_hex(3)}",
+                    "name": "My faceswap bot",
                 }
                 self.repo.put(f"pending:{username}", pending)
                 self.send_creation_request(pending)
