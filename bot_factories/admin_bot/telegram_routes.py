@@ -104,23 +104,27 @@ def recipient_keyboard(bot, invitation):
                 ]
             ]
         }
-    # Telegram supports draft text for username links, not user-ID links.
+    link = bot_link(bot)
     return {
         "inline_keyboard": [
             [
                 {
-                    "text": "Скопировать приглашение",
-                    "copy_text": {"text": invitation},
+                    "text": "Поделиться ссылкой",
+                    "url": "https://t.me/share/url?"
+                    + urlencode(
+                        {"url": link, "text": invitation.replace(link, "").strip()},
+                        quote_via=quote,
+                    ),
                 }
-            ],
-            [
-                {
-                    "text": "Открыть профиль получателя",
-                    "url": f"tg://user?id={bot['recipient_id']}",
-                }
-            ],
+            ]
         ]
     }
+
+
+def bot_link(bot):
+    if bot.get("access_status") != "configured" and activation_link(bot):
+        return activation_link(bot)
+    return f"https://t.me/{bot['username']}"
 
 
 def recipient_label(bot):
@@ -131,7 +135,7 @@ def recipient_label(bot):
 
 def describe(bot):
     return (
-        f"https://t.me/{bot['username']}\nКому: {recipient_label(bot)}\n"
+        f"{bot_link(bot)}\nКому: {recipient_label(bot)}\n"
         f"ID получателя: {bot.get('recipient_id', 'не указан')}\n"
         f"Осталось: {bot['remaining_seconds']} секунд.\n"
         + (
@@ -322,6 +326,8 @@ async def show_card(message, state, recipient):
     record = existing or pending
     if record:
         text += f"\nОсталось: {record['remaining_seconds']} секунд."
+    if existing:
+        text += f"\n{bot_link(existing)}"
     await answer(
         message,
         f"Пользователь: {recipient_label(data)}\n{text}",
@@ -450,7 +456,10 @@ async def register_bot(event: ManagedBotUpdated, bot):
         )
         return
     await bot.send_message(
-        owner, "Бот сохранён.", reply_markup=main_keyboard(), parse_mode=None
+        owner,
+        "Бот сохранён.\n" + bot_link(record),
+        reply_markup=main_keyboard(),
+        parse_mode=None,
     )
     await bot.send_message(
         owner, describe(record), reply_markup=share_keyboard(record), parse_mode=None

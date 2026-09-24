@@ -567,8 +567,46 @@ class AdminTest(unittest.TestCase):
         self.assertIn("https://t.me/child_bot", draft)
         del bot["recipient_username"]
         buttons = routes.share_keyboard(bot)["inline_keyboard"]
-        self.assertEqual(buttons[0][0]["copy_text"]["text"], draft)
-        self.assertEqual(buttons[1][0]["url"], "tg://user?id=456")
+        self.assertEqual(buttons[0][0]["text"], "Поделиться ссылкой")
+        shared = urlsplit(buttons[0][0]["url"])
+        self.assertEqual(shared.path, "/share/url")
+        self.assertEqual(parse_qs(shared.query)["url"], ["https://t.me/child_bot"])
+        self.assertIn("Personal & Test", parse_qs(shared.query)["text"][0])
+
+    def test_no_username_link_and_share_button_on_all_admin_screens(self):
+        from urllib.parse import urlsplit, parse_qs
+
+        self.select_user(username="")
+        self.message("Создать бота")
+        self.message("600")
+        username = self.repo.list_pending()[0]["username"]
+        self.feed(
+            {
+                "managed_bot": {
+                    "user": {"id": 123},
+                    "bot": {"id": 789, "username": username},
+                }
+            }
+        )
+        record = self.repo.get("bot:789")
+
+        def check_message():
+            sent = self.api.call.call_args.kwargs
+            link = routes.bot_link(record)
+            self.assertIn(link, sent["text"])
+            button = sent["reply_markup"]["inline_keyboard"][0][0]
+            self.assertEqual(button["text"], "Поделиться ссылкой")
+            self.assertEqual(parse_qs(urlsplit(button["url"]).query)["url"], [link])
+            self.assertNotIn("tg://", str(sent))
+
+        check_message()
+        for status in ("awaiting_claim", "configured"):
+            record["access_status"] = status
+            self.repo.put("bot:789", record)
+            self.select_user(username="")
+            check_message()
+            self.message("Все боты")
+            check_message()
 
     def test_foreign_creation_cannot_claim_pending(self):
         self.feed({"managed_bot": {"user": {"id": 456}, "bot": {"id": 1}}})

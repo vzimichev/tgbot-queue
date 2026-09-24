@@ -56,7 +56,8 @@ a user opens their card with the current status and available actions:
 - Pending creation: **Продолжить создание** reuses the saved creation request.
 - Awaiting activation: shows the existing one-time link, the current limit,
   **Отправить пользователю**, and **Добавить лимит**. For recipients without a
-  username, the invitation can be copied and their profile opened instead.
+  username, **Поделиться ссылкой** opens Telegram's chat picker instead. The link
+  is also shown as text after creation, on the card, and in **Все боты**.
 - Activated: shows the ordinary bot link, remaining budget, **Отправить пользователю**,
   and **Добавить лимит**.
 
