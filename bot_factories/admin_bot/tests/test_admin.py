@@ -196,52 +196,6 @@ class AdminTest(unittest.TestCase):
             )
         )
 
-    def test_registration_keeps_link_when_recipient_button_is_rejected(self):
-        from aiogram.exceptions import TelegramBadRequest
-        from aiogram.methods import SendMessage
-
-        self.select_user(username="")
-        self.message("Создать бота")
-        self.message("600")
-        username = self.repo.list_pending()[0]["username"]
-        original = self.api.call.side_effect
-
-        def reject_profile(method, **kwargs):
-            markup = kwargs.get("reply_markup", {})
-            if any(
-                button.get("url", "").startswith("tg://user")
-                for row in markup.get("inline_keyboard", [])
-                for button in row
-            ):
-                raise TelegramBadRequest(
-                    method=SendMessage(chat_id=123, text="test"),
-                    message="BUTTON_USER_INVALID",
-                )
-            return original(method, **kwargs)
-
-        self.api.call.side_effect = reject_profile
-        self.api.reset_mock()
-        self.feed(
-            {
-                "managed_bot": {
-                    "user": {"id": 123},
-                    "bot": {"id": 789, "username": username},
-                }
-            }
-        )
-        record = self.repo.get("bot:789")
-        sent = [
-            call.kwargs
-            for call in self.api.call.call_args_list
-            if call.args[0] == "sendMessage"
-        ]
-        self.assertIn(routes.activation_link(record), sent[0]["text"])
-        self.assertIn(routes.activation_link(record), sent[-1]["text"])
-        button = sent[-1]["reply_markup"]["inline_keyboard"][0][0]
-        self.assertEqual(button["text"], "Отправить пользователю")
-        self.assertTrue(button["url"].startswith("https://t.me/share/url?"))
-        self.assertEqual(record["access_status"], "awaiting_claim")
-
     def test_invalid_values_keep_dialogue(self):
         self.message("Выбрать пользователя")
         for text in ("-1", "0", "bad name", "1.5", "²", str(2**53)):

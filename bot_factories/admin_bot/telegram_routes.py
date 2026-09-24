@@ -4,7 +4,6 @@ from urllib.parse import quote, urlencode
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, Filter
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, ManagedBotUpdated
@@ -451,47 +450,11 @@ async def register_bot(event: ManagedBotUpdated, bot):
         )
         return
     await bot.send_message(
-        owner,
-        "Бот сохранён.\n" + invitation(record),
-        reply_markup=main_keyboard(),
-        parse_mode=None,
+        owner, "Бот сохранён.", reply_markup=main_keyboard(), parse_mode=None
     )
-    try:
-        await bot.send_message(
-            owner,
-            describe(record),
-            reply_markup=share_keyboard(record),
-            parse_mode=None,
-        )
-    except TelegramBadRequest:
-        # A recipient-specific button can be rejected; the share dialog does
-        # not depend on Telegram allowing an inline link to that user's ID.
-        await bot.send_message(
-            owner,
-            invitation(record),
-            reply_markup={
-                "inline_keyboard": [
-                    [
-                        {
-                            "text": "Отправить пользователю",
-                            "url": "https://t.me/share/url?"
-                            + urlencode(
-                                {
-                                    "url": (
-                                        activation_link(record)
-                                        if record.get("access_status") != "configured"
-                                        and activation_link(record)
-                                        else f"https://t.me/{record['username']}"
-                                    ),
-                                    "text": "Ваш персональный бот",
-                                }
-                            ),
-                        }
-                    ]
-                ]
-            },
-            parse_mode=None,
-        )
+    await bot.send_message(
+        owner, describe(record), reply_markup=share_keyboard(record), parse_mode=None
+    )
 
 
 def notify_child_claim(message, child_api, result):
