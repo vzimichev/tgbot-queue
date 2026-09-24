@@ -88,6 +88,25 @@ class BotRepository:
         self.repo = repository
         self.owner = owner_id
 
+    def find_recipient(self, recipient_id):
+        existing = next(
+            (
+                bot
+                for bot in self.repo.list_bots()
+                if bot.get("recipient_id") == recipient_id
+            ),
+            None,
+        )
+        pending = next(
+            (
+                bot
+                for bot in self.repo.list_pending()
+                if bot.get("recipient_id") == recipient_id
+            ),
+            None,
+        )
+        return existing, pending
+
     def create_pending(self, recipient, seconds):
         username = f"personal_{secrets.token_hex(6)}_bot"
         record = {
@@ -286,3 +305,18 @@ def process_claim_updates(notify_claim) -> int:
     finally:
         repository.db.close()
     return processed
+
+
+def run_bot_operation(callback):
+    """Keep each SQLite connection and synchronous API call in one worker thread."""
+    settings = get_admin_bot_settings()
+    if not settings.token or settings.owner_id <= 0:
+        raise RuntimeError("ADMIN_BOT_TOKEN and ADMIN_BOT_OWNER_ID are required")
+    cache_folder.mkdir(mode=0o700, exist_ok=True)
+    repository = Repository(cache_folder / "admin.sqlite3")
+    try:
+        return callback(
+            BotRepository(TelegramAPI(settings.token), repository, settings.owner_id)
+        )
+    finally:
+        repository.db.close()

@@ -123,14 +123,14 @@ Docker Compose project while using the root gateway and Redis. See
 startup instructions.
 
 Run `./bot_factories/admin_bot/start_worker.sh` for the local worker setup. In
-the admin bot's private chat, `/create` asks you to choose a Telegram user and enter a limit in seconds.
+the admin bot's private chat, the **Создать бота / добавить лимит** button asks you to choose a Telegram user and enter a limit in seconds.
 Confirm managed bot creation yourself with the offered button and keep its
 suggested username. You remain its owner. The admin bot saves the token and
 limit and creates a one-time link to the personal bot. When the recipient opens
 that link, the worker reads their real Telegram ID, restricts the bot to that
 account, and consumes the link. If the user
-already has a saved bot or pending creation, `/create` asks how many seconds to
-**add** to its limit. `/bots` lists saved bots and invitations. Parameters and managed bot tokens are stored in
+already has a saved bot or pending creation, the **Создать бота / добавить лимит** button asks how many seconds to
+**add** to its limit. **Мои боты** lists saved bots and invitations. Parameters and managed bot tokens are stored in
 `bot_factories/admin_bot/.cache/admin.sqlite3`.
 The generated bots have no handlers yet; the limit is stored but is not spent.
 

@@ -2,7 +2,15 @@ import unittest
 from unittest.mock import Mock, patch
 
 
-from bot_factories.admin_bot.telegram_routes import AdminService, notify_child_claim
+import asyncio
+import copy
+from types import SimpleNamespace
+from aiogram import Bot, Dispatcher
+from aiogram.types import Update
+from unittest.mock import AsyncMock
+from bot_factories.admin_bot import telegram_routes as routes
+from bot_factories.admin_bot.repository import BotRepository
+from bot_factories.admin_bot.telegram_routes import notify_child_claim
 
 
 class MemoryRepository:
@@ -37,20 +45,81 @@ class AdminTest(unittest.TestCase):
                 "added_users": [{"id": 456}],
             },
         }.get(method, True)
-        self.service = AdminService(self.api, self.repo, 123)
+        self.bots = BotRepository(self.api, self.repo, 123)
+        self.runner = asyncio.Runner()
+        self.addCleanup(self.runner.close)
+        self.dp = Dispatcher()
+        router = copy.deepcopy(
+            routes.admin_router, {id(routes.admin_router.parent_router): None}
+        )
+        router._parent_router = None
+        self.dp.include_router(router)
+        self.bot = Bot("123456:test-token")
+
+        async def send(bot, method, **kwargs):
+            payload = method.model_dump(exclude_none=True, exclude_defaults=True)
+            payload.pop("parse_mode", None)
+            self.api.call(method.__api_method__, **payload)
+            return True
+
+        self.bot.session = AsyncMock(side_effect=send)
+        self.context = self.dp.fsm.get_context(bot=self.bot, chat_id=123, user_id=123)
+        settings = patch.object(
+            routes, "get_admin_bot_settings", return_value=SimpleNamespace(owner_id=123)
+        )
+        settings.start()
+        self.addCleanup(settings.stop)
+        operations = patch.object(
+            routes,
+            "run_bot_operation",
+            side_effect=lambda callback: callback(self.bots),
+        )
+        operations.start()
+        self.addCleanup(operations.stop)
+        self.addCleanup(lambda: self.runner.run(self.dp.storage.close()))
+
+    def draft(self):
+        state = self.runner.run(self.context.get_state())
+        if state is None:
+            return None
+        data = self.runner.run(self.context.get_data())
+        step = state.split(":")[-1]
+        if step == "add_limit":
+            key = data.pop("key")
+            data.update(
+                {"bot_id": int(key[4:])}
+                if key.startswith("bot:")
+                else {"pending_username": key[8:]}
+            )
+        return {"step": step, **data}
+
+    def feed(self, body):
+        body = copy.deepcopy(body)
+        body["update_id"] = 17
+        if "message" in body:
+            msg = body["message"]
+            msg.update(message_id=1, date=0)
+            msg["chat"].update(type="private" if msg["chat"]["id"] > 0 else "group")
+            msg["from"].update(is_bot=False, first_name="Test")
+        if "managed_bot" in body:
+            body["managed_bot"]["user"].update(is_bot=False, first_name="Owner")
+            body["managed_bot"]["bot"].update(is_bot=True, first_name="Child")
+        return self.runner.run(
+            self.dp.feed_update(self.bot, Update.model_validate(body))
+        )
 
     def claim_from_child(self, record, message, child_api):
-        result = self.service.bots.claim_from_message(record, message)
+        result = self.bots.claim_from_message(record, message)
         notify_child_claim(message, child_api, result)
         return result == "configured"
 
     def message(self, text, user=123, chat=123):
-        self.service.handle(
+        self.feed(
             {"message": {"from": {"id": user}, "chat": {"id": chat}, "text": text}}
         )
 
     def select_user(self, username="some_user", request_id=None):
-        self.service.handle(
+        self.feed(
             {
                 "message": {
                     "from": {"id": 123},
@@ -59,7 +128,7 @@ class AdminTest(unittest.TestCase):
                         "request_id": (
                             request_id
                             if request_id is not None
-                            else self.repo.get("draft")["request_id"]
+                            else self.draft()["request_id"]
                         ),
                         "users": [
                             {
@@ -74,13 +143,13 @@ class AdminTest(unittest.TestCase):
         )
 
     def test_denies_other_users_and_groups(self):
-        self.message("/create", user=456)
-        self.message("/create", chat=-456)
+        self.message("Создать бота / добавить лимит", user=456)
+        self.message("Создать бота / добавить лимит", chat=-456)
         self.api.call.assert_not_called()
         self.assertEqual(self.repo.data, {})
 
     def test_creation_persists_parameters_without_child_calls(self):
-        self.message("/create")
+        self.message("Создать бота / добавить лимит")
         self.select_user()
         self.message("600")
         pending_key = next(k for k in self.repo.data if k.startswith("pending:"))
@@ -95,8 +164,8 @@ class AdminTest(unittest.TestCase):
                 "bot": {"id": 789, "username": username},
             }
         }
-        self.service.handle(event)
-        self.service.handle(event)  # token updates preserve the budget
+        self.feed(event)
+        self.feed(event)  # token updates preserve the budget
         record = self.repo.get("bot:789")
         self.assertEqual(record["recipient_username"], "some_user")
         self.assertEqual(record["recipient_id"], 456)
@@ -107,7 +176,7 @@ class AdminTest(unittest.TestCase):
         )
         self.assertEqual(record["access_status"], "awaiting_claim")
         self.assertTrue(record["claim_token"])
-        self.assertIn(f"t.me/{username}?start=claim_", self.service.invitation(record))
+        self.assertIn(f"t.me/{username}?start=claim_", routes.invitation(record))
         self.assertEqual(record["owner_id"], 123)
         self.assertEqual(record["remaining_seconds"], 600)
         self.assertEqual(record["token"], "secret-token")
@@ -127,22 +196,22 @@ class AdminTest(unittest.TestCase):
         )
 
     def test_invalid_values_keep_dialogue(self):
-        self.message("/create")
+        self.message("Создать бота / добавить лимит")
         for text in ("-1", "0", "bad name", "1.5", "²", str(2**53)):
             self.message(text)
-            self.assertEqual(self.repo.get("draft")["step"], "recipient")
+            self.assertEqual(self.draft()["step"], "recipient")
         self.select_user()
-        self.assertEqual(self.repo.get("draft")["recipient_username"], "some_user")
+        self.assertEqual(self.draft()["recipient_username"], "some_user")
         for text in ("-1", "0", "abc", "1.5"):
             self.message(text)
-            self.assertEqual(self.repo.get("draft")["step"], "seconds")
-        self.message("/cancel")
-        self.assertIsNone(self.repo.get("draft"))
+            self.assertEqual(self.draft()["step"], "seconds")
+        self.message("Отмена")
+        self.assertIsNone(self.draft())
 
     def test_stale_selection_is_ignored(self):
-        self.message("/create")
+        self.message("Создать бота / добавить лимит")
         self.select_user(request_id=-1)
-        self.assertEqual(self.repo.get("draft")["step"], "recipient")
+        self.assertEqual(self.draft()["step"], "recipient")
 
     def test_existing_recipient_adds_limit_without_creating_another_bot(self):
         self.repo.put(
@@ -155,11 +224,11 @@ class AdminTest(unittest.TestCase):
                 "access_status": "configured",
             },
         )
-        self.message("/create")
+        self.message("Создать бота / добавить лимит")
         self.select_user()
-        self.assertEqual(self.repo.get("draft"), {"step": "add_limit", "bot_id": 789})
+        self.assertEqual(self.draft(), {"step": "add_limit", "bot_id": 789})
         self.message("250")
-        self.assertIsNone(self.repo.get("draft"))
+        self.assertIsNone(self.draft())
         self.assertEqual(self.repo.list_pending(), [])
         record = self.repo.get("bot:789")
         self.assertEqual(record["remaining_seconds"], 850)
@@ -167,15 +236,15 @@ class AdminTest(unittest.TestCase):
         self.assertIn("850", self.api.call.call_args.kwargs["text"])
 
     def test_pending_creation_adds_limit_to_same_username(self):
-        self.message("/create")
+        self.message("Создать бота / добавить лимит")
         self.select_user()
         self.message("600")
         pending = self.repo.list_pending()[0]
-        self.message("/create")
+        self.message("Создать бота / добавить лимит")
         self.select_user()
-        self.assertEqual(self.repo.get("draft")["step"], "add_limit")
+        self.assertEqual(self.draft()["step"], "add_limit")
         self.message("200")
-        self.assertIsNone(self.repo.get("draft"))
+        self.assertIsNone(self.draft())
         self.assertEqual(len(self.repo.list_pending()), 1)
         request = self.api.call.call_args.kwargs["reply_markup"]["keyboard"][0][0]
         self.assertEqual(
@@ -195,11 +264,11 @@ class AdminTest(unittest.TestCase):
                 "budget_seconds": 2**52 - 1,
             },
         )
-        self.message("/create")
+        self.message("Создать бота / добавить лимит")
         self.select_user()
         for value in ("0", "-1", "abc", "2"):
             self.message(value)
-            self.assertEqual(self.repo.get("draft")["step"], "add_limit")
+            self.assertEqual(self.draft()["step"], "add_limit")
             self.assertEqual(self.repo.get("bot:789")["remaining_seconds"], 2**52 - 1)
         self.message("1")
         self.assertEqual(self.repo.get("bot:789")["remaining_seconds"], 2**52)
@@ -254,7 +323,7 @@ class AdminTest(unittest.TestCase):
                     record["claim_token"] = "existing-link"
                 self.repo.put("bot:789", record)
                 self.api.reset_mock()
-                self.service.register(
+                self.bots.register(
                     {"id": 789, "username": "renamed_bot", "first_name": "New name"}
                 )
                 saved = self.repo.get("bot:789")
@@ -380,14 +449,14 @@ class AdminTest(unittest.TestCase):
             return original(method, **kwargs)
 
         self.api.call.side_effect = unavailable
-        self.assertFalse(self.service.bots.grant_access(self.repo.get("bot:789")))
+        self.assertFalse(self.bots.grant_access(self.repo.get("bot:789")))
         self.assertEqual(
             self.repo.get("bot:789")["access_status"], "needs_recipient_start"
         )
-        self.assertIn("Start", self.service.describe(self.repo.get("bot:789")))
-        button = self.service.share_keyboard(self.repo.get("bot:789"))[
-            "inline_keyboard"
-        ][0][0]
+        self.assertIn("Start", routes.describe(self.repo.get("bot:789")))
+        button = routes.share_keyboard(self.repo.get("bot:789"))["inline_keyboard"][0][
+            0
+        ]
         self.assertIn("t.me/alice", button["url"])
         from urllib.parse import parse_qs, urlsplit
 
@@ -401,7 +470,7 @@ class AdminTest(unittest.TestCase):
         self.api.call.assert_any_call(
             "sendMessage",
             chat_id=456,
-            text=self.service.invitation(self.repo.get("bot:789")),
+            text=routes.invitation(self.repo.get("bot:789")),
             reply_markup={
                 "inline_keyboard": [
                     [{"text": "Открыть своего бота", "url": "https://t.me/child_bot"}]
@@ -433,7 +502,7 @@ class AdminTest(unittest.TestCase):
         }
         self.repo.put("bot:789", record)
 
-        self.service.handle(
+        self.feed(
             {
                 "message": {
                     "from": {
@@ -545,7 +614,7 @@ class AdminTest(unittest.TestCase):
             "remaining_seconds": 600,
             "access_status": "configured",
         }
-        button = self.service.share_keyboard(bot)["inline_keyboard"][0][0]
+        button = routes.share_keyboard(bot)["inline_keyboard"][0][0]
         url = urlsplit(button["url"])
         self.assertEqual(url.path, "/alice")
         draft = parse_qs(url.query)["text"][0]
@@ -553,16 +622,16 @@ class AdminTest(unittest.TestCase):
         self.assertIn("600", draft)
         self.assertIn("https://t.me/child_bot", draft)
         del bot["recipient_username"]
-        buttons = self.service.share_keyboard(bot)["inline_keyboard"]
+        buttons = routes.share_keyboard(bot)["inline_keyboard"]
         self.assertEqual(buttons[0][0]["copy_text"]["text"], draft)
         self.assertEqual(buttons[1][0]["url"], "tg://user?id=456")
 
     def test_foreign_creation_cannot_claim_pending(self):
-        self.service.handle({"managed_bot": {"user": {"id": 456}, "bot": {"id": 1}}})
+        self.feed({"managed_bot": {"user": {"id": 456}, "bot": {"id": 1}}})
         self.api.call.assert_not_called()
 
     def test_unknown_username_is_not_bound(self):
-        self.service.handle(
+        self.feed(
             {
                 "managed_bot": {
                     "user": {"id": 123},
@@ -592,59 +661,124 @@ class AdminTest(unittest.TestCase):
             self.assertIsNone(reopened.get("draft"))
             reopened.db.close()
 
-    def test_admin_worker_registers_default_queue_task(self):
+    def test_run_operation_closes_repository_on_error(self):
+        from bot_factories.admin_bot import repository
+
+        with patch.object(
+            repository,
+            "get_admin_bot_settings",
+            return_value=SimpleNamespace(token="test", owner_id=123),
+        ), patch.object(repository, "Repository") as repo:
+
+            def fail(bots):
+                raise RuntimeError("operation failed")
+
+            with self.assertRaisesRegex(RuntimeError, "operation failed"):
+                repository.run_bot_operation(fail)
+            repo.return_value.db.close.assert_called_once()
+
+    def test_buttons_and_cancel_use_fsm_without_sqlite_draft(self):
+        self.message("Создать бота / добавить лимит")
+        self.assertEqual(self.draft()["step"], "recipient")
+        self.select_user()
+        self.assertEqual(self.draft()["step"], "seconds")
+        self.assertNotIn("draft", self.repo.data)
+        self.message("Отмена")
+        self.assertIsNone(self.draft())
+        self.assertEqual(
+            self.api.call.call_args.kwargs["reply_markup"], routes.main_keyboard()
+        )
+        self.message("Мои боты")
+        self.assertEqual(
+            self.api.call.call_args.kwargs["text"], "Пока нет созданных ботов."
+        )
+
+    def test_other_users_cannot_advance_owner_dialogue(self):
+        self.message("Создать бота / добавить лимит")
+        self.select_user()
+        self.api.reset_mock()
+        self.message("600", user=456, chat=456)
+        self.message("Отмена", user=456, chat=456)
+        self.message("Мои боты", user=456, chat=456)
+        self.assertEqual(self.draft()["step"], "seconds")
+        self.assertEqual(self.repo.list_pending(), [])
+        self.api.call.assert_not_called()
+
+    def test_restart_discards_dialogue_but_keeps_pending_bot(self):
+        self.message("Создать бота / добавить лимит")
+        self.select_user()
+        self.message("600")
+        pending = self.repo.list_pending()[0]
+        self.message("Создать бота / добавить лимит")
+        self.select_user()
+        self.runner.run(self.dp.storage.close())
+        from aiogram.fsm.storage.memory import MemoryStorage
+
+        self.dp.fsm.storage = MemoryStorage()
+        self.context = self.dp.fsm.get_context(bot=self.bot, chat_id=123, user_id=123)
+        self.assertIsNone(self.draft())
+        self.message("Создать бота / добавить лимит")
+        self.select_user()
+        self.message("100")
+        self.assertEqual(len(self.repo.list_pending()), 1)
+        self.assertEqual(self.repo.list_pending()[0]["username"], pending["username"])
+        self.assertEqual(self.repo.list_pending()[0]["remaining_seconds"], 700)
+
+    def test_admin_worker_dispatches_commands_and_managed_events(self):
         from shared.config import settings
         from worker.celery_factory import TELEGRAM_UPDATE_QUEUE, TELEGRAM_UPDATE_TASK
 
         with patch.object(settings, "telegram_token", "123456:test-token"):
-            from bot_factories.admin_bot import celery_app as admin_worker
+            from bot_factories.admin_bot import celery_app as worker
+        app = worker.celery_app
+        self.assertEqual(app.conf.task_default_queue, TELEGRAM_UPDATE_QUEUE)
+        with patch.object(app, "dp", self.dp), patch.object(
+            app, "bot", self.bot
+        ), patch.object(
+            app, "telegram_event_loop", self.runner.get_loop(), create=True
+        ):
+            result = app.tasks[TELEGRAM_UPDATE_TASK].run(
+                {
+                    "update_id": 1,
+                    "message": {
+                        "message_id": 1,
+                        "date": 0,
+                        "text": "Создать бота / добавить лимит",
+                        "from": {"id": 123, "is_bot": False, "first_name": "Owner"},
+                        "chat": {"id": 123, "type": "private"},
+                    },
+                }
+            )
+            self.assertEqual(result, {"status": "ok"})
+            self.assertEqual(self.draft()["step"], "recipient")
+            self.select_user()
+            self.message("600")
+            username = self.repo.list_pending()[0]["username"]
+            app.tasks[TELEGRAM_UPDATE_TASK].run(
+                {
+                    "update_id": 2,
+                    "managed_bot": {
+                        "user": {"id": 123, "is_bot": False, "first_name": "Owner"},
+                        "bot": {
+                            "id": 789,
+                            "is_bot": True,
+                            "first_name": "Child",
+                            "username": username,
+                        },
+                    },
+                }
+            )
+            self.assertEqual(
+                self.repo.get("bot:789")["access_status"], "awaiting_claim"
+            )
 
-        self.assertEqual(
-            admin_worker.celery_app.conf.task_default_queue, TELEGRAM_UPDATE_QUEUE
-        )
-        self.assertIn(TELEGRAM_UPDATE_TASK, admin_worker.celery_app.tasks)
-        update = {
-            "update_id": 17,
-            "managed_bot": {
-                "user": {"id": 123, "is_bot": False, "first_name": "Owner"},
-                "bot": {"id": 789, "is_bot": True, "first_name": "Child"},
-            },
-        }
-        from bot_factories.admin_bot import telegram_routes
-
-        with patch.dict(
-            "os.environ",
-            {"ADMIN_BOT_OWNER_ID": "123", "ADMIN_BOT_TOKEN": "123456:test-token"},
-        ), patch.object(telegram_routes, "Repository") as repository, patch.object(
-            telegram_routes, "TelegramAPI"
-        ) as api, patch.object(
-            telegram_routes, "AdminService"
-        ) as service:
-            result = admin_worker.celery_app.tasks[TELEGRAM_UPDATE_TASK].run(update)
-        self.assertEqual(result, {"status": "ok"})
-        service.return_value.handle.assert_called_once()
-        self.assertEqual(
-            service.return_value.handle.call_args.args[0]["managed_bot"]["bot"]["id"],
-            789,
-        )
-        repository.return_value.db.close.assert_called_once()
-
-    def test_admin_route_closes_repository(self):
-        from bot_factories.admin_bot import telegram_routes
-
-        update = {"update_id": 17, "message": {"text": "/start"}}
-        with patch.dict(
-            "os.environ", {"ADMIN_BOT_OWNER_ID": "123", "ADMIN_BOT_TOKEN": "test-token"}
-        ), patch.object(telegram_routes, "Repository") as repo, patch.object(
-            telegram_routes, "TelegramAPI"
-        ) as api, patch.object(
-            telegram_routes, "AdminService"
-        ) as service:
-            telegram_routes.process_telegram_update(update)
-        api.assert_called_once_with("test-token")
-        service.assert_called_once_with(api.return_value, repo.return_value, 123)
-        service.return_value.handle.assert_called_once_with(update)
-        repo.return_value.db.close.assert_called_once()
+    def test_start_clears_dialogue_and_non_text_budget_is_rejected(self):
+        self.message("Создать бота / добавить лимит")
+        self.select_user()
+        self.feed({"message": {"from": {"id": 123}, "chat": {"id": 123}}})
+        self.assertEqual(self.draft()["step"], "seconds")
+        self.message("/start")
+        self.assertIsNone(self.draft())
 
 
 if __name__ == "__main__":

@@ -24,17 +24,19 @@ flowchart LR
         CELERY["Celery task"]
         ROUTER["aiogram admin_router"]
         DIALOG["Recipient and limit dialogue"]
+        FSM["aiogram FSM: temporary dialogue state"]
         REGISTER["Register managed bot"]
         CLAIM["Poll unclaimed personal bots"]
         ACCESS["Restrict access to claimant ID"]
-        DB[("Local SQLite: drafts, bots, limits, tokens")]
+        DB[("Local SQLite: bots, limits, tokens")]
     end
 
-    OWNER -->|/create| TG_BOT
+    OWNER -->|Create button| TG_BOT
     TG_BOT --> TG_EVENTS
     TG_EVENTS --> WEBHOOK --> VALIDATE --> PUBLISH --> QUEUE --> CELERY --> ROUTER
 
     ROUTER --> DIALOG
+    DIALOG <--> FSM
     DIALOG <--> DB
     DIALOG -->|request_users / request_managed_bot| TG_UI
     OWNER -->|select recipient; confirm creation| TG_UI

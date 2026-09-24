@@ -4,7 +4,7 @@ The root `docker-compose.yml` continues to run the webhook API and Redis. The
 admin bot has a separate Docker Compose project containing:
 
 - `worker` runs `admin_router` and manages created bots;
-- `admin_data` persists the SQLite database with drafts, bot records, limits,
+- `admin_data` persists the SQLite database with bot records, limits,
   and managed bot tokens.
 
 The worker joins the root Compose network and connects to its `redis` service.
@@ -44,6 +44,15 @@ gateway's `WEBHOOK_SECRET_TOKEN` when registering the webhook.
 
 The default external Docker network is `tgbot-queue_default`. If the root
 Compose project uses another project name, set `GATEWAY_NETWORK` accordingly.
+
+## Dialogue state
+
+Menu buttons, recipient selection, and budget input use separate aiogram handlers
+and `FSMContext`, following the FaceSwap bot structure. The dialogue uses the
+worker's default in-memory FSM storage: restarting the worker resets unfinished
+input, so start again with **Создать бота / добавить лимит**. Saved bots, pending creations, limits, and
+activation tokens remain in SQLite. Legacy SQLite `draft` records are ignored;
+no database migration is required.
 
 ## Why one-time activation links
 
