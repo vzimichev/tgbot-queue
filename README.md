@@ -112,7 +112,7 @@ Copy `bot_factories/admin_bot/.env.example` to `bot_factories/admin_bot/.env`,
 set `ADMIN_BOT_TOKEN`, your numeric `ADMIN_BOT_OWNER_ID`, and the SSH/Redis
 settings for its gateway. Enable Bot Management Mode for the admin bot in
 BotFather. Set the admin bot's webhook to that gateway's `/webhook` endpoint
-with `allowed_updates=["message", "managed_bot"]`. The gateway publishes the
+with `allowed_updates=["message", "managed_bot", "callback_query"]`. The gateway publishes the
 usual `telegram.process_update` task to `telegram_updates`; the admin worker
 consumes it through its SSH tunnel. Give the admin bot a separate Redis broker
 from other bots because they use the same task name and queue.

@@ -5,7 +5,7 @@ flowchart LR
     subgraph TELEGRAM["Telegram"]
         TG_BOT["Admin bot chat"]
         TG_UI["Recipient picker and bot creation UI"]
-        TG_EVENTS["message / users_shared / managed_bot updates"]
+        TG_EVENTS["message / users_shared / managed_bot / callback_query updates"]
         TG_API["Bot API: tokens and access settings"]
         CHILD["Created bot"]
     end

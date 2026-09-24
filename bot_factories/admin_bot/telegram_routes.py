@@ -6,7 +6,7 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, ManagedBotUpdated
+from aiogram.types import Message, ManagedBotUpdated, CallbackQuery
 
 from bot_factories.admin_bot.config import get_admin_bot_settings
 from bot_factories.admin_bot.repository import run_bot_operation
@@ -134,22 +134,69 @@ def recipient_label(bot):
 
 
 def describe(bot):
-    return (
-        f"{bot_link(bot)}\nКому: {recipient_label(bot)}\n"
-        f"ID получателя: {bot.get('recipient_id', 'не указан')}\n"
-        f"Осталось: {bot['remaining_seconds']} секунд.\n"
-        + (
-            "Доступ выдан выбранному пользователю и владельцу.\n"
-            if bot.get("access_status") == "configured"
-            else (
-                "Отправь получателю приглашение. После перехода по ссылке "
-                "и нажатия Start доступ будет выдан автоматически.\n"
-                if bot.get("access_status") == "needs_recipient_start"
-                else "Доступ ещё не настроен.\n"
-            )
-        )
-        + "Бот пустой, обработчики не подключены."
+    status = (
+        "Бот активирован."
+        if bot.get("access_status") == "configured"
+        else "Бот ожидает активации."
     )
+    return f"Пользователь: {recipient_label(bot)}\n{status}\nОсталось: {bot['remaining_seconds']} секунд."
+
+
+def card_keyboard(bot):
+    rows = share_keyboard(bot)["inline_keyboard"]
+    return {
+        "inline_keyboard": rows
+        + [
+            [{"text": "Добавить лимит", "callback_data": f"limit:{bot['bot_id']}"}],
+            [{"text": "Назад", "callback_data": "card:back"}],
+        ]
+    }
+
+
+@admin_router.callback_query(F.data == "card:back")
+async def card_back(query: CallbackQuery, state: FSMContext):
+    if (
+        query.from_user.id != get_admin_bot_settings().owner_id
+        or not query.message
+        or query.message.chat.id != query.from_user.id
+    ):
+        await query.answer()
+        return
+    await query.answer()
+    await show_menu(query.message, state)
+
+
+@admin_router.callback_query(F.data.startswith("limit:"))
+async def card_limit(query: CallbackQuery, state: FSMContext):
+    if (
+        query.from_user.id != get_admin_bot_settings().owner_id
+        or not query.message
+        or query.message.chat.id != query.from_user.id
+    ):
+        await query.answer()
+        return
+    value = query.data.split(":", 1)[1]
+    record = (
+        await operation(lambda bots: bots.repo.get(f"bot:{value}"))
+        if value.isascii() and value.isdigit()
+        else None
+    )
+    if not record:
+        await query.answer("Бот не найден.")
+        return
+    await query.answer()
+    await state.set_data(
+        {
+            "key": f"bot:{record['bot_id']}",
+            **{
+                key: record[key]
+                for key in ("recipient_id", "recipient_username", "recipient_name")
+                if key in record
+            },
+        }
+    )
+    await state.set_state(Creation.add_limit)
+    await answer(query.message, "Сколько секунд добавить к лимиту?", cancel_keyboard())
 
 
 async def send_creation_request(message, pending):
@@ -272,7 +319,7 @@ async def list_bots(message: Message, state: FSMContext):
         message, "Все боты" if records else "Пока нет созданных ботов.", main_keyboard()
     )
     for record in records:
-        await answer(message, describe(record), share_keyboard(record))
+        await answer(message, describe(record), card_keyboard(record))
 
 
 @admin_router.message(Owner(), F.users_shared)
@@ -327,7 +374,8 @@ async def show_card(message, state, recipient):
     if record:
         text += f"\nОсталось: {record['remaining_seconds']} секунд."
     if existing:
-        text += f"\n{bot_link(existing)}"
+        await answer(message, describe(existing), card_keyboard(existing))
+        return
     await answer(
         message,
         f"Пользователь: {recipient_label(data)}\n{text}",
@@ -337,8 +385,6 @@ async def show_card(message, state, recipient):
             "resize_keyboard": True,
         },
     )
-    if existing:
-        await answer(message, invitation(existing), share_keyboard(existing))
 
 
 @admin_router.message(Owner(), Creation.card, F.text == "Создать бота")
@@ -424,7 +470,7 @@ async def budget(message: Message, state: FSMContext):
     if existing:
         await state.clear()
         await answer(message, "Для этого пользователя бот уже создан.", main_keyboard())
-        await answer(message, describe(existing), share_keyboard(existing))
+        await answer(message, describe(existing), card_keyboard(existing))
         return
     if pending is None:
         pending = await operation(lambda bots: bots.create_pending(data, int(text)))
@@ -456,13 +502,7 @@ async def register_bot(event: ManagedBotUpdated, bot):
         )
         return
     await bot.send_message(
-        owner,
-        "Бот сохранён.\n" + bot_link(record),
-        reply_markup=main_keyboard(),
-        parse_mode=None,
-    )
-    await bot.send_message(
-        owner, describe(record), reply_markup=share_keyboard(record), parse_mode=None
+        owner, describe(record), reply_markup=card_keyboard(record), parse_mode=None
     )
 
 

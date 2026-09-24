@@ -39,7 +39,7 @@ Configure the admin bot webhook on the existing gateway as:
 https://your-domain.example/webhook
 ```
 
-Telegram must send the `message` and `managed_bot` update types. Use the root
+Telegram must send the `message`, `managed_bot`, and `callback_query` update types. Use the root
 gateway's `WEBHOOK_SECRET_TOKEN` when registering the webhook.
 
 The default external Docker network is `tgbot-queue_default`. If the root
@@ -54,11 +54,12 @@ a user opens their card with the current status and available actions:
 - No bot: **Создать бота** asks for the initial budget, then opens Telegram's
   creation confirmation.
 - Pending creation: **Продолжить создание** reuses the saved creation request.
-- Awaiting activation: shows the existing one-time link, the current limit,
+- Awaiting activation: uses the existing one-time link in the sharing button, shows the current limit,
   **Отправить пользователю**, and **Добавить лимит**. For recipients without a
   username, **Поделиться ссылкой** opens Telegram's chat picker instead. The link
-  is also shown as text after creation, on the card, and in **Все боты**.
-- Activated: shows the ordinary bot link, remaining budget, **Отправить пользователю**,
+  is included only in the sharing button, not in the card text. Each saved bot
+  is shown as one message with inline sharing, budget, and back buttons.
+- Activated: uses the ordinary bot link in the sharing button, shows remaining budget, **Отправить пользователю**,
   and **Добавить лимит**.
 
 **Назад** returns from budget input to the card without changing the budget;
@@ -103,6 +104,9 @@ existing access restrictions; they must not reopen an activated bot.
 Do not replace this flow with direct access assignment or require the claimant
 to match the initial selection without first reproducing and resolving the
 original access-setting problem against the real Telegram API.
+
+Existing webhook registrations must include `callback_query` for the inline
+budget and back buttons to work.
 
 ## Operations
 

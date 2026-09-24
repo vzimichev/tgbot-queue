@@ -397,7 +397,7 @@ class AdminTest(unittest.TestCase):
         self.assertEqual(
             self.repo.get("bot:789")["access_status"], "needs_recipient_start"
         )
-        self.assertIn("Start", routes.describe(self.repo.get("bot:789")))
+        self.assertIn("ожидает активации", routes.describe(self.repo.get("bot:789")))
         button = routes.share_keyboard(self.repo.get("bot:789"))["inline_keyboard"][0][
             0
         ]
@@ -593,7 +593,7 @@ class AdminTest(unittest.TestCase):
         def check_message():
             sent = self.api.call.call_args.kwargs
             link = routes.bot_link(record)
-            self.assertIn(link, sent["text"])
+            self.assertNotIn("https://", sent["text"])
             button = sent["reply_markup"]["inline_keyboard"][0][0]
             self.assertEqual(button["text"], "Поделиться ссылкой")
             self.assertEqual(parse_qs(urlsplit(button["url"]).query)["url"], [link])
@@ -747,6 +747,45 @@ class AdminTest(unittest.TestCase):
             )
         )
 
+    def test_card_is_one_message_and_inline_limit_works(self):
+        self.repo.put(
+            "bot:789",
+            {
+                "bot_id": 789,
+                "username": "child_bot",
+                "recipient_id": 456,
+                "remaining_seconds": 600,
+                "access_status": "awaiting_claim",
+                "claim_token": "one",
+            },
+        )
+        self.api.reset_mock()
+        self.select_user(username="")
+        sent = [c for c in self.api.call.call_args_list if c.args[0] == "sendMessage"]
+        self.assertEqual(len(sent), 1)
+        self.assertNotIn("https://", sent[0].kwargs["text"])
+        rows = sent[0].kwargs["reply_markup"]["inline_keyboard"]
+        self.assertEqual(rows[1][0]["callback_data"], "limit:789")
+        self.feed(
+            {
+                "callback_query": {
+                    "id": "q",
+                    "chat_instance": "test",
+                    "from": {"id": 123, "is_bot": False, "first_name": "Owner"},
+                    "data": "limit:789",
+                    "message": {
+                        "message_id": 1,
+                        "date": 0,
+                        "chat": {"id": 123, "type": "private"},
+                        "text": "card",
+                    },
+                }
+            }
+        )
+        self.assertEqual(self.draft()["step"], "add_limit")
+        self.message("100")
+        self.assertEqual(self.repo.get("bot:789")["remaining_seconds"], 700)
+
     def test_card_new_pending_and_back(self):
         self.message("/start")
         self.assertEqual(
@@ -792,8 +831,8 @@ class AdminTest(unittest.TestCase):
             self.message("Выбрать пользователя")
             self.select_user()
             text = self.api.call.call_args.kwargs["text"]
-            self.assertIn("https://t.me/child_bot", text)
-            self.assertEqual("?start=claim_original" in text, status != "configured")
+            self.assertNotIn("https://", text)
+            self.assertIn("Пользователь:", text)
             self.message("250")
             self.assertEqual(self.repo.get("bot:789"), record)
             self.message("Добавить лимит")
