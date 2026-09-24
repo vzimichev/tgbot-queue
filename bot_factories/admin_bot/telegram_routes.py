@@ -20,7 +20,25 @@ class AdminService:
         self.repo = repository
         self.owner = owner_id
 
+    @staticmethod
+    def main_keyboard():
+        return {
+            "keyboard": [
+                [{"text": "Создать бота / добавить лимит"}],
+                [{"text": "Мои боты"}, {"text": "Отмена"}],
+            ],
+            "resize_keyboard": True,
+        }
+
+    @staticmethod
+    def cancel_keyboard():
+        return {"keyboard": [[{"text": "Отмена"}]], "resize_keyboard": True}
+
     def say(self, text, **kwargs):
+        kwargs.setdefault(
+            "reply_markup",
+            self.cancel_keyboard() if self.repo.get("draft") else self.main_keyboard(),
+        )
         self.api.call("sendMessage", chat_id=self.owner, text=text, **kwargs)
 
     def handle(self, update):
@@ -137,7 +155,7 @@ class AdminService:
             self.repo.put("draft", {"step": "seconds", **recipient})
             self.say(
                 "Как долго? Отправь бюджет в секундах, например 600.",
-                reply_markup={"remove_keyboard": True},
+                reply_markup=self.cancel_keyboard(),
             )
             return
         # Telegram also sends a companion service message; managed_bot registers it.
@@ -149,21 +167,18 @@ class AdminService:
             self.say(
                 "/create — создать бота или добавить лимит\n/bots — список ботов\n"
                 "/cancel — отменить ввод\nБюджет задаётся в секундах и не списывается.",
-                reply_markup={
-                    "keyboard": [[{"text": "Создать бота"}]],
-                    "resize_keyboard": True,
-                },
+                reply_markup=self.main_keyboard(),
             )
-        elif command == "/bots":
+        elif command == "/bots" or text == "Мои боты":
             bots = self.repo.list_bots()
             if not bots:
                 self.say("Пока нет созданных ботов.")
             for bot in bots:
                 self.say(self.describe(bot), reply_markup=self.share_keyboard(bot))
-        elif command == "/cancel":
+        elif command == "/cancel" or text == "Отмена":
             self.repo.delete("draft")
             self.say("Ввод отменён.")
-        elif command == "/create" or text == "Создать бота":
+        elif command == "/create" or text in ("Создать бота", "Создать бота / добавить лимит"):
             self.choose_recipient()
         else:
             draft = self.repo.get("draft")
@@ -264,7 +279,8 @@ class AdminService:
                                 "suggested_username": pending["username"],
                             },
                         }
-                    ]
+                    ],
+                    [{"text": "Отмена"}],
                 ],
                 "resize_keyboard": True,
                 "one_time_keyboard": True,
@@ -295,8 +311,9 @@ class AdminService:
         }
         self.prepare_claim(record)
         self.repo.delete(pending_key)
+        self.say("Бот сохранён.", reply_markup=self.main_keyboard())
         self.say(
-            "Бот сохранён.\n" + self.describe(record),
+            self.describe(record),
             reply_markup=self.share_keyboard(record),
         )
 
@@ -331,7 +348,8 @@ class AdminService:
                                 "request_name": True,
                             },
                         }
-                    ]
+                    ],
+                    [{"text": "Отмена"}],
                 ],
                 "resize_keyboard": True,
                 "one_time_keyboard": True,
