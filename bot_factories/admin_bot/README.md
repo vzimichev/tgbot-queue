@@ -55,9 +55,9 @@ a user opens their card with the current status and available actions:
   creation confirmation.
 - Pending creation: **Продолжить создание** reuses the saved creation request.
 - Awaiting activation: shows the existing one-time link, the current limit,
-  **Отправить приглашение**, and **Добавить лимит**. For recipients without a
+  **Отправить пользователю**, and **Добавить лимит**. For recipients without a
   username, the invitation can be copied and their profile opened instead.
-- Activated: shows the ordinary bot link, remaining budget, **Открыть бота**,
+- Activated: shows the ordinary bot link, remaining budget, **Отправить пользователю**,
   and **Добавить лимит**.
 
 **Назад** returns from budget input to the card without changing the budget;

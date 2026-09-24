@@ -98,7 +98,7 @@ def recipient_keyboard(bot, invitation):
             "inline_keyboard": [
                 [
                     {
-                        "text": "Отправить приглашение",
+                        "text": "Отправить пользователю",
                         "url": url,
                     }
                 ]
@@ -332,12 +332,7 @@ async def show_card(message, state, recipient):
         },
     )
     if existing:
-        markup = (
-            open_bot_keyboard(existing, "Открыть бота")
-            if existing.get("access_status") == "configured"
-            else share_keyboard(existing)
-        )
-        await answer(message, invitation(existing), markup)
+        await answer(message, invitation(existing), share_keyboard(existing))
 
 
 @admin_router.message(Owner(), Creation.card, F.text == "Создать бота")
