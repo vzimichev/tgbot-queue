@@ -96,8 +96,13 @@ Possession of the link allows its holder to claim the bot. The claimant's ID is
 intentionally not compared with the initially selected user's ID. Send the link
 only to its intended recipient; this behavior is part of the workaround.
 
-If access setup fails or cannot be confirmed, the token remains valid and the
-worker continues polling for another activation attempt. Repeated registration
+If first-time access setup fails or cannot be confirmed, the worker restores
+unrestricted access and verifies it before allowing another activation attempt.
+The same token and budget are preserved. If reopening fails, the record is marked
+`recovery_failed` and the user is directed to the administrator instead of being
+told to retry an inaccessible bot. Already activated bots are never reopened
+automatically. Access diagnostics record the operation stage, Telegram error code
+and sanitized description, and verification result without tokens or links. Repeated registration
 events and bot API token updates preserve the recipient, activation state, and
 existing access restrictions; they must not reopen an activated bot.
 

@@ -243,6 +243,11 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
         record, result = await operation(activate)
         if result == "invalid":
             await answer(message, "Ссылка недействительна или уже использована.")
+        elif result == "blocked":
+            await answer(
+                message,
+                "Активация не завершена. Восстановить доступ для повторного входа не удалось. Обратись к администратору.",
+            )
         elif result == "failed":
             await answer(
                 message, "Не удалось активировать доступ. Попробуй ещё раз позже."
@@ -513,6 +518,7 @@ def notify_child_claim(message, child_api, result):
     text = {
         "invalid": "Используй персональную ссылку, которую тебе отправили.",
         "failed": "Не удалось активировать доступ. Попробуй ещё раз позже.",
+        "blocked": "Активация не завершена. Восстановить доступ для повторного входа не удалось. Обратись к администратору.",
         "configured": "Готово! Это твой персональный бот.",
     }[result]
     child_api.call("sendMessage", chat_id=sender_id, text=text)

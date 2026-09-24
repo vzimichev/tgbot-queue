@@ -3,6 +3,7 @@ import logging
 import os
 import sqlite3
 import secrets
+import re
 from pathlib import Path
 
 from bot_factories.admin_bot.config import get_admin_bot_settings
@@ -61,6 +62,7 @@ class TelegramAPI:
         # HTTP client logs include the request URL, which contains the bot token.
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
+        detail = "transport or invalid response"
         try:
             response = httpx.post(
                 f"https://api.telegram.org/bot{self.token}/{method}",
@@ -70,10 +72,19 @@ class TelegramAPI:
             data = response.json()
             if response.is_success and data.get("ok"):
                 return data["result"]
+            description = str(data.get("description", "unknown error")).replace(
+                self.token, "[redacted]"
+            )
+            description = re.sub(
+                r"(?:https?://|tg://)\S+|\b\d{5,}:[A-Za-z0-9_-]+|claim_[A-Za-z0-9_-]+",
+                "[redacted]",
+                description,
+            )
+            detail = f"code={data.get('error_code', response.status_code)} description={description[:250]}"
         except (httpx.HTTPError, ValueError):
             pass
         # Never propagate exceptions containing credential-bearing URLs.
-        raise RuntimeError(f"Telegram API call failed: {method}") from None
+        raise RuntimeError(f"Telegram API call failed: {method}; {detail}") from None
 
 
 logger = logging.getLogger(__name__)
@@ -172,14 +183,46 @@ class BotRepository:
         record.setdefault("claim_update_offset", 0)
         self.repo.put(f"bot:{record['bot_id']}", record)
 
-    def grant_access(self, record):
-        record["access_status"] = "pending"
-        self.repo.put(f"bot:{record['bot_id']}", record)
-        if not record.get("recipient_id"):
-            record["access_status"] = "needs_recipient"
-            self.ensure_claim_token(record)
-            self.repo.put(f"bot:{record['bot_id']}", record)
+    def restore_claim(self, record):
+        """Reopen only an unfinished claim, retaining its existing token."""
+        if record.get("access_status") == "configured" or not record.get("claim_token"):
             return False
+        stage = "reopen"
+        try:
+            self.api.call(
+                "setManagedBotAccessSettings",
+                user_id=record["bot_id"],
+                is_access_restricted=False,
+            )
+            stage = "verify_reopen"
+            settings = self.api.call(
+                "getManagedBotAccessSettings", user_id=record["bot_id"]
+            )
+            opened = settings.get("is_access_restricted") is False
+            logger.info(
+                "claim recovery bot_id=%s stage=%s open=%s",
+                record["bot_id"],
+                stage,
+                opened,
+            )
+        except RuntimeError as error:
+            logger.warning(
+                "claim recovery bot_id=%s stage=%s error=%s",
+                record["bot_id"],
+                stage,
+                error,
+            )
+            opened = False
+        record["access_status"] = "awaiting_claim" if opened else "recovery_failed"
+        self.repo.put(f"bot:{record['bot_id']}", record)
+        return opened
+
+    def grant_access(self, record):
+        previously_configured = record.get("access_status") == "configured"
+        if not record.get("recipient_id"):
+            return False
+        stage = "restrict"
+        configured = False
         try:
             self.api.call(
                 "setManagedBotAccessSettings",
@@ -187,32 +230,37 @@ class BotRepository:
                 is_access_restricted=True,
                 added_user_ids=[record["recipient_id"]],
             )
+            stage = "verify_access"
             settings = self.api.call(
                 "getManagedBotAccessSettings", user_id=record["bot_id"]
             )
-        except RuntimeError:
-            logger.exception(
-                "Could not grant managed bot access: bot_id=%s recipient_id=%s",
+            added_ids = {user["id"] for user in settings.get("added_users", [])}
+            configured = (
+                settings.get("is_access_restricted") is True
+                and record["recipient_id"] in added_ids
+            )
+            logger.info(
+                "claim access bot_id=%s recipient_id=%s stage=%s restricted=%s recipient_present=%s",
                 record["bot_id"],
                 record["recipient_id"],
+                stage,
+                settings.get("is_access_restricted"),
+                record["recipient_id"] in added_ids,
             )
-            record["access_status"] = "needs_recipient_start"
-            self.ensure_claim_token(record)
-            self.repo.put(f"bot:{record['bot_id']}", record)
-            return False
-        added_ids = {user["id"] for user in settings.get("added_users", [])}
-        configured = (
-            settings.get("is_access_restricted") is True
-            and record["recipient_id"] in added_ids
-        )
-        record["access_status"] = (
-            "configured" if configured else "needs_recipient_start"
-        )
+        except RuntimeError as error:
+            logger.warning(
+                "claim access bot_id=%s stage=%s error=%s",
+                record["bot_id"],
+                stage,
+                error,
+            )
         if configured:
+            record["access_status"] = "configured"
             record.pop("claim_token", None)
-        else:
+            self.repo.put(f"bot:{record['bot_id']}", record)
+        elif not previously_configured:
             self.ensure_claim_token(record)
-        self.repo.put(f"bot:{record['bot_id']}", record)
+            self.restore_claim(record)
         return configured
 
     @staticmethod
@@ -247,7 +295,11 @@ class BotRepository:
             recipient_username=sender.get("username", ""),
             recipient_name=sender.get("first_name", ""),
         )
-        return "configured" if self.grant_access(record) else "failed"
+        if self.grant_access(record):
+            return "configured"
+        return (
+            "blocked" if record.get("access_status") == "recovery_failed" else "failed"
+        )
 
     def claim_from_message(self, record, message):
         parts = (message.get("text") or "").strip().split(maxsplit=1)

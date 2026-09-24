@@ -240,15 +240,71 @@ class AdminTest(unittest.TestCase):
 
         self.api.call.side_effect = fail
         self.assertFalse(self.claim_from_child(record, message, child_api))
-        self.assertEqual(record["access_status"], "needs_recipient_start")
+        self.assertEqual(record["access_status"], "recovery_failed")
         self.assertEqual(record["claim_token"], "one_time_token")
-        self.assertIn("Не удалось", child_api.call.call_args.kwargs["text"])
+        self.assertIn("не удалось", child_api.call.call_args.kwargs["text"])
         self.api.call.side_effect = original
         self.assertTrue(self.claim_from_child(record, message, child_api))
         self.assertEqual(record["access_status"], "configured")
         self.assertEqual(record["recipient_id"], 456)
         self.assertEqual(record["recipient_username"], "")
         self.assertNotIn("claim_token", record)
+
+    def test_unconfirmed_claim_reopens_and_keeps_token(self):
+        record = {
+            "bot_id": 789,
+            "recipient_id": 456,
+            "access_status": "awaiting_claim",
+            "claim_token": "same",
+            "remaining_seconds": 1000,
+        }
+        restricted = False
+
+        def api(method, **kwargs):
+            nonlocal restricted
+            if method == "setManagedBotAccessSettings":
+                restricted = kwargs["is_access_restricted"]
+                return True
+            if method == "getManagedBotAccessSettings":
+                return {"is_access_restricted": restricted}
+
+        self.api.call.side_effect = api
+        self.assertFalse(self.bots.grant_access(record))
+        self.assertFalse(restricted)
+        self.assertEqual(record["access_status"], "awaiting_claim")
+        self.assertEqual(record["claim_token"], "same")
+        self.assertEqual(record["remaining_seconds"], 1000)
+
+    def test_configured_bot_is_never_reopened_on_failure(self):
+        record = {"bot_id": 789, "recipient_id": 456, "access_status": "configured"}
+        self.api.call.side_effect = RuntimeError("unavailable")
+        self.assertFalse(self.bots.grant_access(record))
+        self.assertEqual(record["access_status"], "configured")
+        self.assertNotIn("claim_token", record)
+        self.assertFalse(
+            any(
+                c.kwargs.get("is_access_restricted") is False
+                for c in self.api.call.call_args_list
+            )
+        )
+
+    def test_api_error_diagnostics_redact_credentials(self):
+        from bot_factories.admin_bot.repository import TelegramAPI
+
+        response = Mock(is_success=False, status_code=400)
+        response.json.return_value = {
+            "error_code": 400,
+            "description": "Bad request secret-token https://example.com/?token=foo claim_private",
+        }
+        with patch(
+            "bot_factories.admin_bot.repository.httpx.post", return_value=response
+        ):
+            with self.assertRaises(RuntimeError) as caught:
+                TelegramAPI("secret-token").call("setManagedBotAccessSettings")
+        text = str(caught.exception)
+        self.assertIn("code=400", text)
+        for value in ("secret-token", "https://", "claim_private"):
+            self.assertNotIn(value, text)
 
     def test_registration_preserves_existing_access_and_claim_state(self):
         for status in ("configured", "awaiting_claim", "needs_recipient_start"):
@@ -343,7 +399,7 @@ class AdminTest(unittest.TestCase):
                 self.api.call.side_effect = fail
                 self.assertEqual(routes.process_claim_updates(notify_child_claim), 1)
                 saved = repo.get("bot:789")
-                self.assertEqual(saved["access_status"], "needs_recipient_start")
+                self.assertEqual(saved["access_status"], "recovery_failed")
                 self.assertEqual(saved["claim_token"], "one_time_token")
                 self.assertEqual(saved["claim_update_offset"], 1)
                 self.api.call.side_effect = original
@@ -394,9 +450,7 @@ class AdminTest(unittest.TestCase):
 
         self.api.call.side_effect = unavailable
         self.assertFalse(self.bots.grant_access(self.repo.get("bot:789")))
-        self.assertEqual(
-            self.repo.get("bot:789")["access_status"], "needs_recipient_start"
-        )
+        self.assertEqual(self.repo.get("bot:789")["access_status"], "recovery_failed")
         self.assertIn("ожидает активации", routes.describe(self.repo.get("bot:789")))
         button = routes.share_keyboard(self.repo.get("bot:789"))["inline_keyboard"][0][
             0
