@@ -1,0 +1,25 @@
+name: admin-bot
+
+services:
+  worker:
+    build:
+      context: ../..
+      dockerfile: bot_factories/admin_bot/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      TELEGRAM_TOKEN: ${ADMIN_BOT_TOKEN:?Set ADMIN_BOT_TOKEN}
+    volumes:
+      - admin_data:/app/bot_factories/admin_bot/.cache
+    networks:
+      - gateway
+
+volumes:
+  admin_data:
+
+networks:
+  gateway:
+    external: true
+    name: ${GATEWAY_NETWORK:-tgbot-queue_default}
