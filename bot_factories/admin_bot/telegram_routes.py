@@ -16,8 +16,8 @@ admin_router = Router()
 
 class Creation(StatesGroup):
     recipient = State()
+    card = State()
     seconds = State()
-    selected = State()
     add_limit = State()
 
 
@@ -42,15 +42,15 @@ async def answer(message, text, reply_markup=None):
 def main_keyboard():
     return {
         "keyboard": [
-            [{"text": "Создать бота / добавить лимит"}],
-            [{"text": "Мои боты"}, {"text": "Отмена"}],
+            [{"text": "Выбрать пользователя"}],
+            [{"text": "Все боты"}],
         ],
         "resize_keyboard": True,
     }
 
 
 def cancel_keyboard():
-    return {"keyboard": [[{"text": "Отмена"}]], "resize_keyboard": True}
+    return {"keyboard": [[{"text": "Назад"}]], "resize_keyboard": True}
 
 
 def invitation(bot):
@@ -87,7 +87,7 @@ def recipient_keyboard(bot, invitation):
             "inline_keyboard": [
                 [
                     {
-                        "text": "Открыть чат с получателем",
+                        "text": "Отправить приглашение",
                         "url": url,
                     }
                 ]
@@ -137,7 +137,7 @@ def describe(bot):
     )
 
 
-async def send_creation_request(message, pending, include_limit=False):
+async def send_creation_request(message, pending):
     await answer(
         message,
         f"Название: {pending['name']}\nUsername: @{pending['username']}\n"
@@ -157,8 +157,7 @@ async def send_creation_request(message, pending, include_limit=False):
                         },
                     }
                 ],
-                *([[{"text": "Добавить лимит"}]] if include_limit else []),
-                [{"text": "Отмена"}],
+                [{"text": "Назад"}],
             ],
             "resize_keyboard": True,
             "one_time_keyboard": True,
@@ -238,28 +237,30 @@ async def show_menu(message: Message, state: FSMContext):
     )
 
 
-@admin_router.message(Owner(), F.text == "Отмена")
-async def cancel(message: Message, state: FSMContext):
-    await state.clear()
-    await answer(message, "Ввод отменён.", main_keyboard())
+@admin_router.message(Owner(), F.text == "Назад")
+async def back(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if await state.get_state() in (
+        Creation.seconds.state,
+        Creation.add_limit.state,
+    ) and data.get("recipient_id"):
+        await show_card(message, state, data)
+    else:
+        await show_menu(message, state)
 
 
-@admin_router.message(Owner(), F.text == "Мои боты")
+@admin_router.message(Owner(), F.text == "Все боты")
 async def list_bots(message: Message, state: FSMContext):
+    await state.clear()
     records = await operation(lambda bots: bots.repo.list_bots())
-    if not records:
-        await answer(
-            message,
-            "Пока нет созданных ботов.",
-            cancel_keyboard() if await state.get_state() else main_keyboard(),
-        )
+    await answer(
+        message, "Все боты" if records else "Пока нет созданных ботов.", main_keyboard()
+    )
     for record in records:
         await answer(message, describe(record), share_keyboard(record))
 
 
-@admin_router.message(
-    Owner(), F.text.in_({"Создать бота", "Создать бота / добавить лимит"})
-)
+@admin_router.message(Owner(), F.text == "Выбрать пользователя")
 async def create(message: Message, state: FSMContext):
     await state.clear()
     request_id = secrets.randbelow(2**31)
@@ -282,7 +283,7 @@ async def create(message: Message, state: FSMContext):
                         },
                     }
                 ],
-                [{"text": "Отмена"}],
+                [{"text": "Назад"}],
             ],
             "resize_keyboard": True,
             "one_time_keyboard": True,
@@ -300,7 +301,7 @@ async def select_recipient(message: Message, state: FSMContext):
     ):
         await answer(
             message,
-            "Этот выбор устарел. Нажми «Создать бота / добавить лимит», чтобы начать заново.",
+            "Этот выбор устарел. Нажми «Выбрать пользователя», чтобы начать заново.",
             main_keyboard(),
         )
         return
@@ -313,54 +314,93 @@ async def select_recipient(message: Message, state: FSMContext):
         "recipient_username": user.username or "",
         "recipient_name": user.first_name or "",
     }
-    existing, pending = await operation(lambda bots: bots.find_recipient(user.user_id))
-    if existing or pending:
-        key = (
-            f"bot:{existing['bot_id']}"
-            if existing
-            else f"pending:{pending['username']}"
-        )
-        await state.set_data({"key": key})
-        await state.set_state(Creation.selected)
-        if existing:
-            await answer(
-                message,
-                "Бот уже создан. Вот ссылка для получателя.",
-                selected_keyboard(),
-            )
-            await answer(message, invitation(existing), share_keyboard(existing))
-        else:
-            await send_creation_request(message, pending, include_limit=True)
-    else:
-        await state.set_data(recipient)
-        await state.set_state(Creation.seconds)
-        await answer(
-            message,
-            "Как долго? Отправь бюджет в секундах, например 600.",
-            cancel_keyboard(),
-        )
+    await show_card(message, state, recipient)
 
 
-def selected_keyboard():
-    return {
-        "keyboard": [[{"text": "Добавить лимит"}], [{"text": "Отмена"}]],
-        "resize_keyboard": True,
+async def show_card(message, state, recipient):
+    existing, pending = await operation(
+        lambda bots: bots.find_recipient(recipient["recipient_id"])
+    )
+    data = {
+        key: recipient[key]
+        for key in ("recipient_id", "recipient_username", "recipient_name")
+        if key in recipient
     }
+    await state.set_state(Creation.card)
+    if existing:
+        data["key"] = f"bot:{existing['bot_id']}"
+        text = (
+            "Бот активирован."
+            if existing.get("access_status") == "configured"
+            else "Бот ожидает активации."
+        )
+        actions = ["Добавить лимит"]
+    elif pending:
+        data["key"] = f"pending:{pending['username']}"
+        text = "Заверши создание бота в Telegram."
+        actions = ["Продолжить создание"]
+    else:
+        text = "Бот ещё не создан."
+        actions = ["Создать бота"]
+    await state.set_data(data)
+    record = existing or pending
+    if record:
+        text += f"\nОсталось: {record['remaining_seconds']} секунд."
+    await answer(
+        message,
+        f"Пользователь: {recipient_label(data)}\n{text}",
+        {
+            "keyboard": [[{"text": action}] for action in actions]
+            + [[{"text": "Назад"}]],
+            "resize_keyboard": True,
+        },
+    )
+    if existing:
+        markup = (
+            open_bot_keyboard(existing, "Открыть бота")
+            if existing.get("access_status") == "configured"
+            else share_keyboard(existing)
+        )
+        await answer(message, invitation(existing), markup)
 
 
-@admin_router.message(Owner(), Creation.selected, F.text == "Добавить лимит")
-async def request_limit(message: Message, state: FSMContext):
+@admin_router.message(Owner(), Creation.card, F.text == "Создать бота")
+async def begin_creation(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if data.get("key"):
+        await show_card(message, state, data)
+        return
+    await state.set_state(Creation.seconds)
+    await answer(
+        message,
+        "Как долго? Отправь бюджет в секундах, например 600.",
+        cancel_keyboard(),
+    )
+
+
+@admin_router.message(Owner(), Creation.card, F.text == "Продолжить создание")
+async def continue_creation(message: Message, state: FSMContext):
+    data = await state.get_data()
+    record = await operation(lambda bots: bots.repo.get(data.get("key", "")))
+    if record and data["key"].startswith("pending:"):
+        await send_creation_request(message, record)
+    else:
+        await show_card(message, state, data)
+
+
+@admin_router.message(Owner(), Creation.card, F.text == "Добавить лимит")
+async def begin_limit(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if not data.get("key", "").startswith("bot:"):
+        await show_card(message, state, data)
+        return
     await state.set_state(Creation.add_limit)
     await answer(message, "Сколько секунд добавить к лимиту?", cancel_keyboard())
 
 
-@admin_router.message(Owner(), Creation.selected, F.text)
-async def waiting_for_action(message: Message):
-    await answer(
-        message,
-        "Ссылка уже показана выше. Чтобы изменить лимит, нажми «Добавить лимит».",
-        selected_keyboard(),
-    )
+@admin_router.message(Owner(), Creation.card, F.text)
+async def card_hint(message: Message, state: FSMContext):
+    await show_card(message, state, await state.get_data())
 
 
 @admin_router.message(Owner(), F.managed_bot_created)
@@ -388,21 +428,18 @@ async def budget(message: Message, state: FSMContext):
             await state.clear()
             await answer(
                 message,
-                "Бот не найден. Нажми «Создать бота / добавить лимит», чтобы начать заново.",
+                "Бот не найден. Нажми «Выбрать пользователя», чтобы начать заново.",
                 main_keyboard(),
             )
             return
         except ValueError:
             await answer(message, "Итоговый лимит слишком велик.", cancel_keyboard())
             return
-        await state.clear()
         await answer(
             message,
             f"Добавлено {int(text)} секунд. Новый лимит: {record['remaining_seconds']} секунд.",
-            main_keyboard(),
         )
-        if data["key"].startswith("pending:"):
-            await send_creation_request(message, record)
+        await show_card(message, state, data)
         return
     existing, pending = await operation(
         lambda bots: bots.find_recipient(data["recipient_id"])
@@ -414,7 +451,8 @@ async def budget(message: Message, state: FSMContext):
         return
     if pending is None:
         pending = await operation(lambda bots: bots.create_pending(data, int(text)))
-    await state.clear()
+    await state.set_data({**data, "key": f"pending:{pending['username']}"})
+    await state.set_state(Creation.card)
     await send_creation_request(message, pending)
 
 

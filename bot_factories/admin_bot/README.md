@@ -45,12 +45,30 @@ gateway's `WEBHOOK_SECRET_TOKEN` when registering the webhook.
 The default external Docker network is `tgbot-queue_default`. If the root
 Compose project uses another project name, set `GATEWAY_NETWORK` accordingly.
 
+## Menu
+
+The main menu has **Выбрать пользователя** and **Все боты**. Selecting a user
+opens their card with the current status and available actions:
+
+- No bot: **Создать бота** asks for the initial budget, then opens Telegram's
+  creation confirmation.
+- Pending creation: **Продолжить создание** reuses the saved creation request.
+- Awaiting activation: shows the existing one-time link, the current limit,
+  **Отправить приглашение**, and **Добавить лимит**. For recipients without a
+  username, the invitation can be copied and their profile opened instead.
+- Activated: shows the ordinary bot link, remaining budget, **Открыть бота**,
+  and **Добавить лимит**.
+
+**Назад** returns from budget input to the card without changing the budget;
+from the card or recipient picker it returns to the main menu. Selecting a user
+again never changes their limit or creates a duplicate bot.
+
 ## Dialogue state
 
 Menu buttons, recipient selection, and budget input use separate aiogram handlers
 and `FSMContext`, following the FaceSwap bot structure. The dialogue uses the
 worker's default in-memory FSM storage: restarting the worker resets unfinished
-input, so start again with **Создать бота / добавить лимит**. Saved bots, pending creations, limits, and
+input, so start again with **Выбрать пользователя**. Saved bots, pending creations, limits, and
 activation tokens remain in SQLite. Legacy SQLite `draft` records are ignored;
 no database migration is required.
 

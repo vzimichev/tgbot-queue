@@ -31,7 +31,7 @@ flowchart LR
         DB[("Local SQLite: bots, limits, tokens")]
     end
 
-    OWNER -->|Create button| TG_BOT
+    OWNER -->|Select user button| TG_BOT
     TG_BOT --> TG_EVENTS
     TG_EVENTS --> WEBHOOK --> VALIDATE --> PUBLISH --> QUEUE --> CELERY --> ROUTER
 

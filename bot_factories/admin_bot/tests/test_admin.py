@@ -143,14 +143,15 @@ class AdminTest(unittest.TestCase):
         )
 
     def test_denies_other_users_and_groups(self):
-        self.message("Создать бота / добавить лимит", user=456)
-        self.message("Создать бота / добавить лимит", chat=-456)
+        self.message("Выбрать пользователя", user=456)
+        self.message("Выбрать пользователя", chat=-456)
         self.api.call.assert_not_called()
         self.assertEqual(self.repo.data, {})
 
     def test_creation_persists_parameters_without_child_calls(self):
-        self.message("Создать бота / добавить лимит")
+        self.message("Выбрать пользователя")
         self.select_user()
+        self.message("Создать бота")
         self.message("600")
         pending_key = next(k for k in self.repo.data if k.startswith("pending:"))
         username = pending_key.split(":", 1)[1]
@@ -196,109 +197,25 @@ class AdminTest(unittest.TestCase):
         )
 
     def test_invalid_values_keep_dialogue(self):
-        self.message("Создать бота / добавить лимит")
+        self.message("Выбрать пользователя")
         for text in ("-1", "0", "bad name", "1.5", "²", str(2**53)):
             self.message(text)
             self.assertEqual(self.draft()["step"], "recipient")
         self.select_user()
+        self.message("Создать бота")
         self.assertEqual(self.draft()["recipient_username"], "some_user")
         for text in ("-1", "0", "abc", "1.5"):
             self.message(text)
             self.assertEqual(self.draft()["step"], "seconds")
-        self.message("Отмена")
+        self.message("Назад")
+        self.assertEqual(self.draft()["step"], "card")
+        self.message("Назад")
         self.assertIsNone(self.draft())
 
     def test_stale_selection_is_ignored(self):
-        self.message("Создать бота / добавить лимит")
+        self.message("Выбрать пользователя")
         self.select_user(request_id=-1)
         self.assertEqual(self.draft()["step"], "recipient")
-
-    def test_existing_recipient_adds_limit_without_creating_another_bot(self):
-        self.repo.put(
-            "bot:789",
-            {
-                "bot_id": 789,
-                "username": "child_bot",
-                "recipient_id": 456,
-                "remaining_seconds": 600,
-                "access_status": "configured",
-            },
-        )
-        self.message("Создать бота / добавить лимит")
-        self.select_user()
-        self.assertEqual(self.repo.get("bot:789")["remaining_seconds"], 600)
-        self.assertIn("https://t.me/child_bot", self.api.call.call_args.kwargs["text"])
-        self.message("Добавить лимит")
-        self.assertEqual(self.draft(), {"step": "add_limit", "bot_id": 789})
-        self.message("250")
-        self.assertIsNone(self.draft())
-        self.assertEqual(self.repo.list_pending(), [])
-        record = self.repo.get("bot:789")
-        self.assertEqual(record["remaining_seconds"], 850)
-        self.assertEqual(record["budget_seconds"], 850)
-        self.assertIn("850", self.api.call.call_args.kwargs["text"])
-
-    def test_existing_unclaimed_bot_shows_same_link_without_changing_budget(self):
-        record = {
-            "bot_id": 789,
-            "username": "child_bot",
-            "recipient_id": 456,
-            "remaining_seconds": 600,
-            "access_status": "awaiting_claim",
-            "claim_token": "original-token",
-        }
-        self.repo.put("bot:789", record.copy())
-        self.message("Создать бота / добавить лимит")
-        self.select_user()
-        self.assertIn(
-            "https://t.me/child_bot?start=claim_original-token",
-            self.api.call.call_args.kwargs["text"],
-        )
-        self.message("250")
-        self.assertEqual(self.repo.get("bot:789"), record)
-        self.assertEqual(self.repo.list_pending(), [])
-        self.message("Отмена")
-        self.assertIsNone(self.draft())
-
-    def test_pending_creation_adds_limit_to_same_username(self):
-        self.message("Создать бота / добавить лимит")
-        self.select_user()
-        self.message("600")
-        pending = self.repo.list_pending()[0]
-        self.message("Создать бота / добавить лимит")
-        self.select_user()
-        self.message("Добавить лимит")
-        self.assertEqual(self.draft()["step"], "add_limit")
-        self.message("200")
-        self.assertIsNone(self.draft())
-        self.assertEqual(len(self.repo.list_pending()), 1)
-        request = self.api.call.call_args.kwargs["reply_markup"]["keyboard"][0][0]
-        self.assertEqual(
-            request["request_managed_bot"]["suggested_username"], pending["username"]
-        )
-        self.assertIn("800 секунд", self.api.call.call_args.kwargs["text"])
-        self.assertEqual(self.repo.list_pending()[0]["remaining_seconds"], 800)
-
-    def test_add_limit_rejects_invalid_and_overflow(self):
-        self.repo.put(
-            "bot:789",
-            {
-                "bot_id": 789,
-                "username": "child_bot",
-                "recipient_id": 456,
-                "remaining_seconds": 2**52 - 1,
-                "budget_seconds": 2**52 - 1,
-            },
-        )
-        self.message("Создать бота / добавить лимит")
-        self.select_user()
-        self.message("Добавить лимит")
-        for value in ("0", "-1", "abc", "2"):
-            self.message(value)
-            self.assertEqual(self.draft()["step"], "add_limit")
-            self.assertEqual(self.repo.get("bot:789")["remaining_seconds"], 2**52 - 1)
-        self.message("1")
-        self.assertEqual(self.repo.get("bot:789")["remaining_seconds"], 2**52)
 
     def test_child_claim_failure_can_be_retried_without_username(self):
         record = {
@@ -704,53 +621,17 @@ class AdminTest(unittest.TestCase):
                 repository.run_bot_operation(fail)
             repo.return_value.db.close.assert_called_once()
 
-    def test_buttons_and_cancel_use_fsm_without_sqlite_draft(self):
-        self.message("Создать бота / добавить лимит")
-        self.assertEqual(self.draft()["step"], "recipient")
-        self.select_user()
-        self.assertEqual(self.draft()["step"], "seconds")
-        self.assertNotIn("draft", self.repo.data)
-        self.message("Отмена")
-        self.assertIsNone(self.draft())
-        self.assertEqual(
-            self.api.call.call_args.kwargs["reply_markup"], routes.main_keyboard()
-        )
-        self.message("Мои боты")
-        self.assertEqual(
-            self.api.call.call_args.kwargs["text"], "Пока нет созданных ботов."
-        )
-
     def test_other_users_cannot_advance_owner_dialogue(self):
-        self.message("Создать бота / добавить лимит")
+        self.message("Выбрать пользователя")
         self.select_user()
+        self.message("Создать бота")
         self.api.reset_mock()
         self.message("600", user=456, chat=456)
-        self.message("Отмена", user=456, chat=456)
-        self.message("Мои боты", user=456, chat=456)
+        self.message("Назад", user=456, chat=456)
+        self.message("Все боты", user=456, chat=456)
         self.assertEqual(self.draft()["step"], "seconds")
         self.assertEqual(self.repo.list_pending(), [])
         self.api.call.assert_not_called()
-
-    def test_restart_discards_dialogue_but_keeps_pending_bot(self):
-        self.message("Создать бота / добавить лимит")
-        self.select_user()
-        self.message("600")
-        pending = self.repo.list_pending()[0]
-        self.message("Создать бота / добавить лимит")
-        self.select_user()
-        self.runner.run(self.dp.storage.close())
-        from aiogram.fsm.storage.memory import MemoryStorage
-
-        self.dp.fsm.storage = MemoryStorage()
-        self.context = self.dp.fsm.get_context(bot=self.bot, chat_id=123, user_id=123)
-        self.assertIsNone(self.draft())
-        self.message("Создать бота / добавить лимит")
-        self.select_user()
-        self.message("Добавить лимит")
-        self.message("100")
-        self.assertEqual(len(self.repo.list_pending()), 1)
-        self.assertEqual(self.repo.list_pending()[0]["username"], pending["username"])
-        self.assertEqual(self.repo.list_pending()[0]["remaining_seconds"], 700)
 
     def test_admin_worker_dispatches_commands_and_managed_events(self):
         from shared.config import settings
@@ -771,7 +652,7 @@ class AdminTest(unittest.TestCase):
                     "message": {
                         "message_id": 1,
                         "date": 0,
-                        "text": "Создать бота / добавить лимит",
+                        "text": "Выбрать пользователя",
                         "from": {"id": 123, "is_bot": False, "first_name": "Owner"},
                         "chat": {"id": 123, "type": "private"},
                     },
@@ -780,6 +661,7 @@ class AdminTest(unittest.TestCase):
             self.assertEqual(result, {"status": "ok"})
             self.assertEqual(self.draft()["step"], "recipient")
             self.select_user()
+            self.message("Создать бота")
             self.message("600")
             username = self.repo.list_pending()[0]["username"]
             app.tasks[TELEGRAM_UPDATE_TASK].run(
@@ -801,12 +683,106 @@ class AdminTest(unittest.TestCase):
             )
 
     def test_start_clears_dialogue_and_non_text_budget_is_rejected(self):
-        self.message("Создать бота / добавить лимит")
+        self.message("Выбрать пользователя")
         self.select_user()
+        self.message("Создать бота")
         self.feed({"message": {"from": {"id": 123}, "chat": {"id": 123}}})
         self.assertEqual(self.draft()["step"], "seconds")
         self.message("/start")
         self.assertIsNone(self.draft())
+
+    def test_card_new_pending_and_back(self):
+        self.message("/start")
+        self.assertEqual(
+            routes.main_keyboard()["keyboard"],
+            [[{"text": "Выбрать пользователя"}], [{"text": "Все боты"}]],
+        )
+        self.message("Выбрать пользователя")
+        self.select_user()
+        self.assertEqual(self.draft()["step"], "card")
+        self.assertIn("не создан", self.api.call.call_args.kwargs["text"])
+        self.message("600")
+        self.assertEqual(self.repo.list_pending(), [])
+        self.message("Создать бота")
+        self.message("600")
+        pending = self.repo.list_pending()[0].copy()
+        self.message("Назад")
+        self.assertIsNone(self.draft())
+        self.message("Выбрать пользователя")
+        self.select_user()
+        self.assertIn("Заверши создание", self.api.call.call_args.kwargs["text"])
+        self.message("Продолжить создание")
+        request = self.api.call.call_args.kwargs["reply_markup"]["keyboard"][0][0]
+        self.assertEqual(
+            request["request_managed_bot"]["suggested_username"], pending["username"]
+        )
+        self.assertEqual(self.repo.list_pending(), [pending])
+
+    def test_card_links_preserve_claim_and_limit(self):
+        for status in ("awaiting_claim", "configured"):
+            record = {
+                "bot_id": 789,
+                "username": "child_bot",
+                "recipient_id": 456,
+                "remaining_seconds": 600,
+                "access_status": status,
+            }
+            if status != "configured":
+                record["claim_token"] = "original"
+            self.repo.put("bot:789", record.copy())
+            self.message("Выбрать пользователя")
+            self.select_user()
+            text = self.api.call.call_args.kwargs["text"]
+            self.assertIn("https://t.me/child_bot", text)
+            self.assertEqual("?start=claim_original" in text, status != "configured")
+            self.message("250")
+            self.assertEqual(self.repo.get("bot:789"), record)
+            self.message("Добавить лимит")
+            self.assertEqual(self.draft()["step"], "add_limit")
+            self.message("250")
+            self.assertEqual(self.repo.get("bot:789")["remaining_seconds"], 850)
+            self.assertEqual(self.draft()["step"], "card")
+            self.assertEqual(self.repo.list_pending(), [])
+
+    def test_budget_validation_and_back_does_not_mutate(self):
+        self.repo.put(
+            "bot:789",
+            {
+                "bot_id": 789,
+                "username": "child_bot",
+                "recipient_id": 456,
+                "remaining_seconds": 2**52 - 1,
+                "access_status": "configured",
+            },
+        )
+        self.message("Выбрать пользователя")
+        self.select_user()
+        self.message("Добавить лимит")
+        for value in ("0", "-1", "abc", "2"):
+            self.message(value)
+            self.assertEqual(self.draft()["step"], "add_limit")
+            self.assertEqual(self.repo.get("bot:789")["remaining_seconds"], 2**52 - 1)
+        self.message("Назад")
+        self.assertEqual(self.draft()["step"], "card")
+        self.message("Добавить лимит")
+        self.message("1")
+        self.assertEqual(self.repo.get("bot:789")["remaining_seconds"], 2**52)
+
+    def test_restart_keeps_pending_creation(self):
+        self.message("Выбрать пользователя")
+        self.select_user()
+        self.message("Создать бота")
+        self.message("600")
+        pending = self.repo.list_pending()[0].copy()
+        from aiogram.fsm.storage.memory import MemoryStorage
+
+        self.dp.fsm.storage = MemoryStorage()
+        self.context = self.dp.fsm.get_context(bot=self.bot, chat_id=123, user_id=123)
+        self.message("Выбрать пользователя")
+        self.select_user()
+        self.assertEqual(self.draft()["step"], "card")
+        self.assertIn("Заверши создание", self.api.call.call_args.kwargs["text"])
+        self.assertEqual(self.repo.list_pending(), [pending])
 
 
 if __name__ == "__main__":
