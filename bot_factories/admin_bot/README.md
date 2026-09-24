@@ -45,6 +45,36 @@ gateway's `WEBHOOK_SECRET_TOKEN` when registering the webhook.
 The default external Docker network is `tgbot-queue_default`. If the root
 Compose project uses another project name, set `GATEWAY_NETWORK` accordingly.
 
+## Why one-time activation links
+
+Granting access directly to the selected Telegram user caused problems during
+development. One-time activation links are an intentional workaround. The exact
+cause of the Telegram access-setting failures has not been established; this is
+an observed integration issue, not a documented universal Telegram restriction.
+
+The initially selected user is used for bookkeeping and sending the invitation.
+The final recipient is identified by the actual Telegram user ID in the message
+sent when they open the personal bot's link and press Start.
+
+Before activation, the bot has unrestricted Telegram access, but its worker only
+handles activation messages; it does not run user tasks. A valid link binds the
+bot to the account activating it. The worker restricts access to that recipient
+(the owner retains access), reads back the access settings, and consumes the
+activation token only after confirming that the restriction was applied.
+
+Possession of the link allows its holder to claim the bot. The claimant's ID is
+intentionally not compared with the initially selected user's ID. Send the link
+only to its intended recipient; this behavior is part of the workaround.
+
+If access setup fails or cannot be confirmed, the token remains valid and the
+worker continues polling for another activation attempt. Repeated registration
+events and bot API token updates preserve the recipient, activation state, and
+existing access restrictions; they must not reopen an activated bot.
+
+Do not replace this flow with direct access assignment or require the claimant
+to match the initial selection without first reproducing and resolving the
+original access-setting problem against the real Telegram API.
+
 ## Operations
 
 ```bash
