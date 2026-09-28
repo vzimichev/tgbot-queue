@@ -85,6 +85,7 @@ Local bot credentials belong in separate, ignored files:
 | --- | --- |
 | `bot_factories/echo_bot/.env` (or one file per echo bot) | Echo Celery worker and its SSH tunnel |
 | `bot_factories/faceswap_bot/.env` | FaceSwap worker, SSH tunnel, and local FaceFusion API |
+| `bot_factories/admin_bot/.env` | Admin Celery worker and its SSH tunnel |
 
 Copy the matching `.env.example` file in each bot directory and fill in its
 credentials. Each launcher loads its own file. To run two echo bots, copy
@@ -98,11 +99,45 @@ terminals:
 ./bot_factories/echo_bot/start_worker.sh bot_factories/echo_bot/.env.echo1
 ./bot_factories/echo_bot/start_worker.sh bot_factories/echo_bot/.env.echo2
 ./bot_factories/faceswap_bot/start_worker.sh
+./bot_factories/admin_bot/start_worker.sh
 ```
 
 Each bot needs its own gateway deployment, Redis broker, and webhook. The
 gateway publishes `telegram.process_update` to `telegram_updates`.
 The Compose file runs one gateway deployment.
+
+### Admin bot factory
+
+Copy `bot_factories/admin_bot/.env.example` to `bot_factories/admin_bot/.env`,
+set `ADMIN_BOT_TOKEN`, your numeric `ADMIN_BOT_OWNER_ID`, and the SSH/Redis
+settings for its gateway. Enable Bot Management Mode for the admin bot in
+BotFather. Set the admin bot's webhook to that gateway's `/webhook` endpoint
+with `allowed_updates=["message", "managed_bot", "callback_query"]`. The gateway publishes the
+usual `telegram.process_update` task to `telegram_updates`; the admin worker
+consumes it through its SSH tunnel. Give the admin bot a separate Redis broker
+from other bots because they use the same task name and queue.
+
+The admin worker and its persistent SQLite database can also run in their own
+Docker Compose project while using the root gateway and Redis. See
+[`bot_factories/admin_bot/README.md`](bot_factories/admin_bot/README.md) for the
+startup instructions.
+
+Run `./bot_factories/admin_bot/start_worker.sh` for the local worker setup. In
+the admin bot's private chat, **Выбрать пользователя** asks you to choose a
+Telegram user and opens their bot card. If no bot exists, press **Создать бота**
+and enter its initial limit in seconds.
+Confirm managed bot creation yourself with the offered button and keep its
+suggested username. You remain its owner. The admin bot saves the token and
+limit and creates a one-time link to the personal bot. When the recipient opens
+that link, the worker reads their real Telegram ID, restricts the bot to that
+account, and consumes the link. If the user
+already has a saved bot, selecting them shows the existing invitation (or the
+ordinary bot link after activation). For a pending creation, it shows the
+**Продолжить создание** button. **Добавить лимит** on a saved bot's card asks
+for seconds to add. **Все боты** lists saved bots and invitations. Parameters
+and managed bot tokens are stored in
+`bot_factories/admin_bot/.cache/admin.sqlite3`.
+The generated bots have no handlers yet; the limit is stored but is not spent.
 
 ## Running the Cloud Gateway
 
