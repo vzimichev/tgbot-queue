@@ -166,6 +166,10 @@ class BotRepository:
             "owner_id": self.owner,
         }
         if existing:
+            if record.get("access_status") == "configured":
+                # Records activated before access modes were introduced were
+                # successfully protected through Telegram.
+                record.setdefault("access_mode", "telegram")
             self.repo.put(key, record)
         else:
             self.prepare_claim(record)
@@ -256,12 +260,34 @@ class BotRepository:
             )
         if configured:
             record["access_status"] = "configured"
+            record["access_mode"] = "telegram"
             record.pop("claim_token", None)
             self.repo.put(f"bot:{record['bot_id']}", record)
         elif not previously_configured:
             self.ensure_claim_token(record)
-            self.restore_claim(record)
+            if self.restore_claim(record):
+                record["access_status"] = "configured"
+                record["access_mode"] = "application"
+                record.pop("claim_token", None)
+                self.repo.put(f"bot:{record['bot_id']}", record)
+                configured = True
         return configured
+
+    @staticmethod
+    def recipient_has_access(record, sender_id):
+        """Authorize a personal-bot action from the persisted Telegram ID."""
+        return (
+            record.get("access_status") == "configured"
+            and isinstance(sender_id, int)
+            and sender_id > 0
+            and sender_id == record.get("recipient_id")
+        )
+
+    def run_recipient_action(self, record, sender_id, action):
+        """Run an action only after the central personal-bot access check."""
+        if not self.recipient_has_access(record, sender_id):
+            return "forbidden", None
+        return "allowed", action()
 
     @staticmethod
     def ensure_claim_token(record):

@@ -250,7 +250,7 @@ class AdminTest(unittest.TestCase):
         self.assertEqual(record["recipient_username"], "")
         self.assertNotIn("claim_token", record)
 
-    def test_unconfirmed_claim_reopens_and_keeps_token(self):
+    def test_unconfirmed_claim_uses_application_access(self):
         record = {
             "bot_id": 789,
             "recipient_id": 456,
@@ -269,11 +269,71 @@ class AdminTest(unittest.TestCase):
                 return {"is_access_restricted": restricted}
 
         self.api.call.side_effect = api
-        self.assertFalse(self.bots.grant_access(record))
+        self.assertTrue(self.bots.grant_access(record))
         self.assertFalse(restricted)
-        self.assertEqual(record["access_status"], "awaiting_claim")
-        self.assertEqual(record["claim_token"], "same")
+        self.assertEqual(record["access_status"], "configured")
+        self.assertEqual(record["access_mode"], "application")
+        self.assertNotIn("claim_token", record)
         self.assertEqual(record["remaining_seconds"], 1000)
+
+    def test_application_access_rejects_outsider_before_limit_change(self):
+        record = {
+            "bot_id": 789,
+            "recipient_id": 456,
+            "access_status": "configured",
+            "access_mode": "application",
+            "remaining_seconds": 1000,
+        }
+
+        def spend_limit():
+            record["remaining_seconds"] -= 100
+            return record["remaining_seconds"]
+
+        status, result = self.bots.run_recipient_action(record, 999, spend_limit)
+        self.assertEqual((status, result), ("forbidden", None))
+        self.assertEqual(record["remaining_seconds"], 1000)
+
+        status, result = self.bots.run_recipient_action(record, 456, spend_limit)
+        self.assertEqual((status, result), ("allowed", 900))
+        self.assertEqual(record["remaining_seconds"], 900)
+
+    def test_claim_without_username_falls_back_to_application_access(self):
+        record = {
+            "bot_id": 789,
+            "username": "child_bot",
+            "remaining_seconds": 1000,
+            "access_status": "awaiting_claim",
+            "claim_token": "one_time_token",
+        }
+        restricted = False
+
+        def api(method, **kwargs):
+            nonlocal restricted
+            if method == "setManagedBotAccessSettings":
+                restricted = kwargs["is_access_restricted"]
+                return True
+            if method == "getManagedBotAccessSettings":
+                return {
+                    "is_access_restricted": restricted,
+                    "added_users": [],
+                }
+            return True
+
+        self.api.call.side_effect = api
+        result = self.bots.activate_claim(
+            record,
+            {"id": 456, "first_name": "No username"},
+            "one_time_token",
+        )
+
+        self.assertEqual(result, "configured")
+        self.assertEqual(record["recipient_id"], 456)
+        self.assertEqual(record["recipient_username"], "")
+        self.assertEqual(record["access_status"], "configured")
+        self.assertEqual(record["access_mode"], "application")
+        self.assertFalse(restricted)
+        self.assertNotIn("claim_token", record)
+        self.assertIn("Защита: приложение.", routes.describe(record))
 
     def test_configured_bot_is_never_reopened_on_failure(self):
         record = {"bot_id": 789, "recipient_id": 456, "access_status": "configured"}
@@ -317,6 +377,7 @@ class AdminTest(unittest.TestCase):
                     "recipient_id": 456,
                     "remaining_seconds": 600,
                     "access_status": status,
+                    "access_mode": "telegram" if status == "configured" else None,
                     "claim_update_offset": 42,
                 }
                 if status != "configured":
@@ -333,6 +394,7 @@ class AdminTest(unittest.TestCase):
                     "access_status",
                     "claim_update_offset",
                     "claim_token",
+                    "access_mode",
                 ):
                     self.assertEqual(saved.get(field), record.get(field))
                 self.assertEqual(saved["token"], "secret-token")
@@ -343,6 +405,26 @@ class AdminTest(unittest.TestCase):
                         for c in self.api.call.call_args_list
                     )
                 )
+
+    def test_registration_backfills_legacy_configured_access_mode(self):
+        self.repo.put(
+            "bot:789",
+            {
+                "bot_id": 789,
+                "username": "child_bot",
+                "name": "Child",
+                "recipient_id": 456,
+                "remaining_seconds": 600,
+                "access_status": "configured",
+            },
+        )
+
+        saved = self.bots.register(
+            {"id": 789, "username": "child_bot", "first_name": "Child"}
+        )
+
+        self.assertEqual(saved["access_mode"], "telegram")
+        self.assertIn("Защита: Telegram.", routes.describe(saved))
 
     def test_polling_retries_failed_claim_and_stops_after_success(self):
         import tempfile
@@ -518,6 +600,7 @@ class AdminTest(unittest.TestCase):
         self.assertEqual(saved["recipient_id"], 457)
         self.assertEqual(saved["recipient_username"], "actual_user")
         self.assertEqual(saved["access_status"], "configured")
+        self.assertEqual(saved["access_mode"], "telegram")
         self.assertNotIn("claim_token", saved)
         self.api.call.assert_any_call(
             "setManagedBotAccessSettings",
@@ -588,6 +671,7 @@ class AdminTest(unittest.TestCase):
         self.assertTrue(claimed)
         self.assertEqual(record["recipient_id"], 457)
         self.assertEqual(record["access_status"], "configured")
+        self.assertEqual(record["access_mode"], "telegram")
         self.assertNotIn("claim_token", record)
         self.api.call.assert_any_call(
             "setManagedBotAccessSettings",

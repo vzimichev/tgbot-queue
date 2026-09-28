@@ -88,22 +88,29 @@ sent when they open the personal bot's link and press Start.
 
 Before activation, the bot has unrestricted Telegram access, but its worker only
 handles activation messages; it does not run user tasks. A valid link binds the
-bot to the account activating it. The worker restricts access to that recipient
-(the owner retains access), reads back the access settings, and consumes the
-activation token only after confirming that the restriction was applied.
+bot to the account activating it. The worker first restricts access to that
+recipient (the owner retains access) and reads the settings back. Confirmed
+Telegram access is stored as `access_mode=telegram`.
+
+Telegram can report that restriction is enabled without returning the recipient
+in `added_users`, especially for a recipient without a username. In that case the
+worker reopens the bot, verifies that it is open, and completes activation with
+`access_mode=application`. Application mode checks the persisted recipient's
+Telegram ID before every personal-bot action. Other accounts are rejected before
+work starts or quota can be changed. The activation token is consumed only after
+either mode is ready. The admin card shows the selected protection mode.
 
 Possession of the link allows its holder to claim the bot. The claimant's ID is
 intentionally not compared with the initially selected user's ID. Send the link
 only to its intended recipient; this behavior is part of the workaround.
 
-If first-time access setup fails or cannot be confirmed, the worker restores
-unrestricted access and verifies it before allowing another activation attempt.
-The same token and budget are preserved. If reopening fails, the record is marked
-`recovery_failed` and the user is directed to the administrator instead of being
-told to retry an inaccessible bot. Already activated bots are never reopened
-automatically. Access diagnostics record the operation stage, Telegram error code
-and sanitized description, and verification result without tokens or links. Repeated registration
-events and bot API token updates preserve the recipient, activation state, and
+If first-time access setup fails and the bot cannot be reopened, the same token
+and budget are preserved, the record is marked `recovery_failed`, and the user is
+directed to the administrator instead of being told to retry an inaccessible
+bot. Already activated bots are never reopened automatically. Access diagnostics
+record the operation stage, Telegram error code and sanitized description, and
+verification result without tokens or links. Repeated registration events and
+bot API token updates preserve the recipient, activation state, access mode, and
 existing access restrictions; they must not reopen an activated bot.
 
 Do not replace this flow with direct access assignment or require the claimant

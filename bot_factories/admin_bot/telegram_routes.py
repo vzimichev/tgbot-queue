@@ -139,7 +139,18 @@ def describe(bot):
         if bot.get("access_status") == "configured"
         else "Бот ожидает активации."
     )
-    return f"Пользователь: {recipient_label(bot)}\n{status}\nОсталось: {bot['remaining_seconds']} секунд."
+    access_mode = bot.get("access_mode")
+    if access_mode is None and bot.get("access_status") == "configured":
+        access_mode = "telegram"
+    protection = {
+        "telegram": "Telegram",
+        "application": "приложение",
+    }.get(access_mode)
+    details = f"\nЗащита: {protection}." if protection else ""
+    return (
+        f"Пользователь: {recipient_label(bot)}\n{status}{details}\n"
+        f"Осталось: {bot['remaining_seconds']} секунд."
+    )
 
 
 def card_keyboard(bot):
