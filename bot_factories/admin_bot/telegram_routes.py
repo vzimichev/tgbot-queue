@@ -59,9 +59,29 @@ async def start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(AdminFlow.choosing_recipient)
     await message.answer(
-        "Choose one Telegram user to manage.",
+        "Choose an action.",
         reply_markup=main_menu_keyboard(),
     )
+
+
+@admin_router.message(F.text == "All bots")
+async def list_bots(message: Message, state: FSMContext) -> None:
+    """Show cards for every managed bot, abandoning any unfinished dialogue."""
+    await state.clear()
+    bots = await asyncio.to_thread(managed_bots_repository.list_bots)
+    if not bots:
+        await message.answer(
+            "No bots have been created yet.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    await message.answer(
+        "All bots:",
+        reply_markup=main_menu_keyboard(),
+    )
+    for managed_bot in bots:
+        await show_bot_card(message, managed_bot)
 
 
 @admin_router.callback_query(F.data.startswith("limit:"))

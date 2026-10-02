@@ -29,7 +29,8 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
                         request_name=True,
                     ),
                 )
-            ]
+            ],
+            [KeyboardButton(text="All bots")],
         ],
         resize_keyboard=True,
     )
