@@ -7,6 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from bot_factories.admin_bot.repositories.cards import (
+    main_menu_keyboard,
     parse_limit_action,
     show_bot_card,
 )
@@ -30,7 +31,10 @@ async def start(message: Message, state: FSMContext) -> None:
     """Reset an interrupted admin dialogue and show its entry action."""
     await state.clear()
     await state.set_state(AdminFlow.choosing_recipient)
-    await message.answer("Choose one Telegram user to manage.")
+    await message.answer(
+        "Choose one Telegram user to manage.",
+        reply_markup=main_menu_keyboard(),
+    )
 
 
 @admin_router.callback_query(F.data.startswith("limit:"))

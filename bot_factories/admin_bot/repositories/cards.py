@@ -1,8 +1,34 @@
 from urllib.parse import quote, urlencode
 
-from aiogram.types import Message
+from aiogram.types import (
+    KeyboardButton,
+    KeyboardButtonRequestUsers,
+    Message,
+    ReplyKeyboardMarkup,
+)
 
 from bot_factories.admin_bot.db.managed_bots import ManagedBotRow, ManagedBotStatus
+
+
+def main_menu_keyboard() -> ReplyKeyboardMarkup:
+    """Return the entry keyboard for the admin dialogue."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(
+                    text="Choose user",
+                    request_users=KeyboardButtonRequestUsers(
+                        request_id=1,
+                        user_is_bot=False,
+                        max_quantity=1,
+                        request_username=True,
+                        request_name=True,
+                    ),
+                )
+            ]
+        ],
+        resize_keyboard=True,
+    )
 
 
 def parse_limit_action(
