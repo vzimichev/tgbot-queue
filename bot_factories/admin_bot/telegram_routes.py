@@ -19,9 +19,8 @@ from bot_factories.admin_bot.telegram_views import (
     show_bot_card,
     user_card,
 )
-from bot_factories.admin_bot.repositories import (
-    ManagedBotsRepository,
-)
+from bot_factories.admin_bot.crud import ManagedBotStatus
+from bot_factories.admin_bot.repositories import ManagedBotsRepository
 
 
 managed_bots_repository = ManagedBotsRepository()
@@ -160,6 +159,12 @@ async def receive_recipient(message: Message, state: FSMContext) -> None:
         managed_bots_repository.get_by_recipient,
         user.user_id,
     )
+    if existing_bot and existing_bot.status == ManagedBotStatus.PENDING_CREATION:
+        await state.clear()
+        card = managed_bot_creation_card(existing_bot, secrets.randbelow(2**31))
+        await message.answer(card.text, reply_markup=card.reply_markup)
+        return
+
     card = user_card(
         user.user_id,
         user.username,

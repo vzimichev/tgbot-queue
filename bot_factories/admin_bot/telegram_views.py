@@ -100,7 +100,8 @@ def managed_bot_creation_card(bot: ManagedBotRow, request_id: int) -> UserCard:
                             suggested_username=bot.username,
                         ),
                     )
-                ]
+                ],
+                [KeyboardButton(text="Back")],
             ],
             resize_keyboard=True,
             one_time_keyboard=True,
