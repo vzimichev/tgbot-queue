@@ -11,6 +11,7 @@ from bot_factories.admin_bot.config import admin_bot_settings
 
 from bot_factories.admin_bot.telegram_views import (
     main_menu_keyboard,
+    back_keyboard,
     managed_bot_creation_card,
     parse_limit_action,
     bot_card_keyboard,
@@ -56,12 +57,31 @@ class AdminFlow(StatesGroup):
 @admin_router.message(Command("start"))
 async def start(message: Message, state: FSMContext) -> None:
     """Reset an interrupted admin dialogue and show its entry action."""
+    await show_main_menu(message, state)
+
+
+async def show_main_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(AdminFlow.choosing_recipient)
     await message.answer(
         "Choose an action.",
         reply_markup=main_menu_keyboard(),
     )
+
+
+@admin_router.message(F.text == "Back")
+async def back_to_menu(message: Message, state: FSMContext) -> None:
+    await show_main_menu(message, state)
+
+
+@admin_router.callback_query(F.data == "menu:back")
+async def card_back_to_menu(query: CallbackQuery, state: FSMContext) -> None:
+    if query.message is None:
+        await query.answer()
+        return
+
+    await query.answer()
+    await show_main_menu(query.message, state)
 
 
 @admin_router.message(F.text == "All bots")
@@ -108,7 +128,10 @@ async def handle_limit(query: CallbackQuery, state: FSMContext) -> None:
         await query.answer()
         await state.set_data(bot_id=bot.id)
         await state.set_state(AdminFlow.entering_additional_limit)
-        await query.message.answer("Send the number of seconds to add.")
+        await query.message.answer(
+            "Send the number of seconds to add.",
+            reply_markup=back_keyboard(),
+        )
         return
 
     try:
@@ -158,7 +181,10 @@ async def receive_recipient(message: Message, state: FSMContext) -> None:
 @admin_router.message(StateFilter(AdminFlow.creating_bot), F.text == "Create bot")
 async def begin_creation(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminFlow.entering_initial_limit)
-    await message.answer("Send the initial limit in seconds.")
+    await message.answer(
+        "Send the initial limit in seconds.",
+        reply_markup=back_keyboard(),
+    )
 
 
 @admin_router.message(StateFilter(AdminFlow.entering_initial_limit))

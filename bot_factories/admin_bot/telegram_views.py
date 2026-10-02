@@ -57,7 +57,10 @@ def user_card(
         return UserCard(
             text=f"User: {recipient}\nNo bot yet.",
             reply_markup=ReplyKeyboardMarkup(
-                keyboard=[[KeyboardButton(text="Create bot")]],
+                keyboard=[
+                    [KeyboardButton(text="Create bot")],
+                    [KeyboardButton(text="Back")],
+                ],
                 resize_keyboard=True,
             ),
         )
@@ -171,9 +174,17 @@ def bot_card_keyboard(bot: ManagedBotRow) -> InlineKeyboardMarkup:
                     text="Custom amount", callback_data=f"limit:{bot.id}:custom"
                 )
             ],
+            [InlineKeyboardButton(text="Back", callback_data="menu:back")],
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def back_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Back")]],
+        resize_keyboard=True,
+    )
 
 
 async def show_bot_card(message: Message, bot: ManagedBotRow) -> None:
