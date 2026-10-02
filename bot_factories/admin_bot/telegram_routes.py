@@ -10,6 +10,7 @@ from bot_factories.admin_bot.repositories.cards import (
     main_menu_keyboard,
     parse_limit_action,
     show_bot_card,
+    user_card,
 )
 from bot_factories.admin_bot.repositories.managed_bots import (
     ManagedBotsRepository,
@@ -21,7 +22,13 @@ managed_bots_repository = ManagedBotsRepository()
 
 
 class AdminFlow(StatesGroup):
+    """
+    choosing_recipient
+                ├─(if user's bot found)─> entering_additional_limit
+                └─(if not)─> creating_bot -> entering_initial_limit
+    """
     choosing_recipient = State()
+    creating_bot = State()
     entering_initial_limit = State()
     entering_additional_limit = State()
 
@@ -90,16 +97,26 @@ async def receive_recipient(message: Message, state: FSMContext) -> None:
         managed_bots_repository.get_by_recipient,
         user.user_id,
     )
-    if existing_bot is not None:
-        await state.clear()
-        await show_bot_card(message, existing_bot)
-        return
-
-    await state.update_data(
-        recipient_id=user.user_id,
-        recipient_username=user.username,
-        recipient_name=user.first_name,
+    card = user_card(
+        user.user_id,
+        user.username,
+        user.first_name,
+        existing_bot,
     )
+    if existing_bot is None:
+        await state.update_data(
+            recipient_id=user.user_id,
+            recipient_username=user.username,
+            recipient_name=user.first_name,
+        )
+        await state.set_state(AdminFlow.creating_bot)
+    else:
+        await state.clear()
+    await message.answer(card.text, reply_markup=card.reply_markup)
+
+
+@admin_router.message(StateFilter(AdminFlow.creating_bot), F.text == "Create bot")
+async def begin_creation(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminFlow.entering_initial_limit)
     await message.answer("Send the initial limit in seconds.")
 

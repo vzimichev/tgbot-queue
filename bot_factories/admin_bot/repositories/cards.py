@@ -1,11 +1,14 @@
 from urllib.parse import quote, urlencode
 
 from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     KeyboardButton,
     KeyboardButtonRequestUsers,
     Message,
     ReplyKeyboardMarkup,
 )
+from dataclasses import dataclass
 
 from bot_factories.admin_bot.db.managed_bots import ManagedBotRow, ManagedBotStatus
 
@@ -28,6 +31,49 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             ]
         ],
         resize_keyboard=True,
+    )
+
+
+@dataclass(frozen=True)
+class UserCard:
+    text: str
+    reply_markup: ReplyKeyboardMarkup | InlineKeyboardMarkup | None = None
+
+
+def user_card(
+    recipient_id: int,
+    recipient_username: str | None,
+    recipient_name: str | None,
+    bot: ManagedBotRow | None,
+) -> UserCard:
+    recipient = (
+        f"@{recipient_username}"
+        if recipient_username
+        else recipient_name or str(recipient_id)
+    )
+    if bot is None:
+        return UserCard(
+            text=f"User: {recipient}\nNo bot yet.",
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text="Create bot")]],
+                resize_keyboard=True,
+            ),
+        )
+
+    status_text = {
+        ManagedBotStatus.PENDING_CREATION: "Creation pending.",
+        ManagedBotStatus.AWAITING_ACTIVATION: "Awaiting activation.",
+        ManagedBotStatus.ACTIVE: "Active.",
+        ManagedBotStatus.ERROR: "Bot setup failed.",
+    }[bot.status]
+    return UserCard(
+        text=(
+            f"User: {recipient}\n"
+            f"Bot: @{bot.username}\n"
+            f"{status_text}\n"
+            f"Remaining: {bot.remaining_seconds} seconds"
+        ),
+        reply_markup=bot_card_keyboard(bot),
     )
 
 
@@ -72,35 +118,36 @@ def bot_card_text(bot: ManagedBotRow) -> str:
     )
 
 
-def bot_card_keyboard(bot: ManagedBotRow) -> dict:
+def bot_card_keyboard(bot: ManagedBotRow) -> InlineKeyboardMarkup:
     rows = []
     if bot.telegram_bot_id is not None:
         invitation = f"https://t.me/{bot.username}"
         rows.append(
             [
-                {
-                    "text": "Invite",
-                    "url": "https://t.me/share/url?"
+                InlineKeyboardButton(
+                    text="Invite",
+                    url="https://t.me/share/url?"
                     + urlencode({"url": invitation}, quote_via=quote),
-                }
+                )
             ]
         )
     rows.extend(
         [
             [
-                {"text": "+10", "callback_data": f"limit:{bot.id}:10"},
-                {"text": "+100", "callback_data": f"limit:{bot.id}:100"},
-                {"text": "+1000", "callback_data": f"limit:{bot.id}:1000"},
+                InlineKeyboardButton(text="+10", callback_data=f"limit:{bot.id}:10"),
+                InlineKeyboardButton(text="+100", callback_data=f"limit:{bot.id}:100"),
+                InlineKeyboardButton(
+                    text="+1000", callback_data=f"limit:{bot.id}:1000"
+                ),
             ],
             [
-                {
-                    "text": "Custom amount",
-                    "callback_data": f"limit:{bot.id}:custom",
-                }
+                InlineKeyboardButton(
+                    text="Custom amount", callback_data=f"limit:{bot.id}:custom"
+                )
             ],
         ]
     )
-    return {"inline_keyboard": rows}
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def show_bot_card(message: Message, bot: ManagedBotRow) -> None:
