@@ -3,7 +3,7 @@ import sqlite3
 from dataclasses import replace
 
 from bot_factories.admin_bot.db.db_engine import transaction, transactional
-from bot_factories.admin_bot.db.managed_bots import (
+from bot_factories.admin_bot.crud import (
     ManagedBotRow,
     ManagedBotStatus,
     ManagedBotsCrud,

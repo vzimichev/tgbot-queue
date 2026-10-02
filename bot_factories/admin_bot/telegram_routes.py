@@ -9,7 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, ManagedBotUpdated, Message
 from bot_factories.admin_bot.config import admin_bot_settings
 
-from bot_factories.admin_bot.repositories.telegram_cards import (
+from bot_factories.admin_bot.telegram_views import (
     main_menu_keyboard,
     managed_bot_creation_card,
     parse_limit_action,
@@ -18,7 +18,7 @@ from bot_factories.admin_bot.repositories.telegram_cards import (
     show_bot_card,
     user_card,
 )
-from bot_factories.admin_bot.repositories.managed_bots import (
+from bot_factories.admin_bot.repositories import (
     ManagedBotsRepository,
 )
 

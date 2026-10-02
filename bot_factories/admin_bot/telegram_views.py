@@ -11,7 +11,7 @@ from aiogram.types import (
 )
 from dataclasses import dataclass
 
-from bot_factories.admin_bot.db.managed_bots import ManagedBotRow, ManagedBotStatus
+from bot_factories.admin_bot.crud import ManagedBotRow, ManagedBotStatus
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
