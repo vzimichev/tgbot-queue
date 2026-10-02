@@ -1,14 +1,20 @@
 import asyncio
+import secrets
 
 from aiogram import F, Router
+from aiogram.client.bot import Bot
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, ManagedBotUpdated, Message
+from bot_factories.admin_bot.config import admin_bot_settings
 
-from bot_factories.admin_bot.repositories.cards import (
+from bot_factories.admin_bot.repositories.telegram_cards import (
     main_menu_keyboard,
+    managed_bot_creation_card,
     parse_limit_action,
+    bot_card_keyboard,
+    bot_card_text,
     show_bot_card,
     user_card,
 )
@@ -16,9 +22,23 @@ from bot_factories.admin_bot.repositories.managed_bots import (
     ManagedBotsRepository,
 )
 
-admin_router = Router()
 
 managed_bots_repository = ManagedBotsRepository()
+
+
+def is_owner(event: Message | CallbackQuery) -> bool:
+    user = event.from_user
+    message = event if isinstance(event, Message) else event.message
+    return bool(
+        user
+        and message
+        and user.id == admin_bot_settings.owner_id
+        and message.chat.id == user.id
+    )
+
+admin_router = Router()
+admin_router.message.filter(is_owner)
+admin_router.callback_query.filter(is_owner)
 
 
 class AdminFlow(StatesGroup):
@@ -149,7 +169,8 @@ async def receive_initial_limit(message: Message, state: FSMContext) -> None:
         return
 
     await state.clear()
-    await show_bot_card(message, bot)
+    card = managed_bot_creation_card(bot, secrets.randbelow(2**31))
+    await message.answer(card.text, reply_markup=card.reply_markup)
 
 
 @admin_router.message(StateFilter(AdminFlow.entering_additional_limit))
@@ -179,6 +200,41 @@ async def receive_additional_limit(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     await show_bot_card(message, bot)
+
+
+@admin_router.managed_bot()
+async def register_managed_bot(event: ManagedBotUpdated, bot: Bot) -> None:
+    """Bind Telegram's creation result to the saved pending record."""
+    if event.user.id != admin_bot_settings.owner_id:
+        return
+
+    created = event.bot_user
+    try:
+        record = await asyncio.to_thread(
+            managed_bots_repository.register_created_bot,
+            created.id,
+            created.username or "",
+            created.first_name or created.username or "",
+        )
+    except (RuntimeError, ValueError):
+        await bot.send_message(
+            event.user.id,
+            "The managed bot could not be registered. Please try again.",
+        )
+        return
+
+    if record is None:
+        await bot.send_message(
+            event.user.id,
+            "This bot does not match a pending creation request.",
+        )
+        return
+
+    await bot.send_message(
+        event.user.id,
+        bot_card_text(record),
+        reply_markup=bot_card_keyboard(record),
+    )
 
 
 def _parse_seconds(text: str | None) -> int | None:

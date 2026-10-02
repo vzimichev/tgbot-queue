@@ -4,6 +4,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
+    KeyboardButtonRequestManagedBot,
     KeyboardButtonRequestUsers,
     Message,
     ReplyKeyboardMarkup,
@@ -77,6 +78,30 @@ def user_card(
     )
 
 
+def managed_bot_creation_card(bot: ManagedBotRow, request_id: int) -> UserCard:
+    """Return Telegram's native managed-bot creation action for a pending bot."""
+    return UserCard(
+        text=(
+            f"Create @{bot.username} in Telegram.\n"
+            f"Initial limit: {bot.remaining_seconds} seconds."
+        ),
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[
+                [
+                    KeyboardButton(
+                        text="Create in Telegram",
+                        request_managed_bot=KeyboardButtonRequestManagedBot(
+                            request_id=request_id,
+                            suggested_name=bot.name,
+                            suggested_username=bot.username,
+                        ),
+                    )
+                ]
+            ],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        ),
+    )
 def parse_limit_action(
     callback_data: str | None,
 ) -> tuple[int, int | None] | None:
