@@ -17,7 +17,8 @@ Create the environment file:
 cp bot_factories/admin_bot/.env.example bot_factories/admin_bot/.env
 ```
 
-Set `ADMIN_BOT_TOKEN`, `ADMIN_BOT_OWNER_ID`, and `REDIS_PASSWORD`. Start the
+Set `ADMIN_BOT_TOKEN`, `ADMIN_BOT_OWNER_ID`, `ADMIN_BOT_CHILD_WEBHOOK_URL` (for
+example, `https://your-domain.example/webhook/managed`), and `REDIS_PASSWORD`. Start the
 root stack first so its Redis service and network exist:
 
 ```bash
@@ -41,6 +42,12 @@ https://your-domain.example/webhook
 
 Telegram must send the `message`, `managed_bot`, and `callback_query` update types. Use the root
 gateway's `WEBHOOK_SECRET_TOKEN` when registering the webhook.
+
+When the admin bot registers a managed bot, it automatically configures that
+bot's webhook at `ADMIN_BOT_CHILD_WEBHOOK_URL/<bot_id>`. The gateway and admin
+worker must use the same `WEBHOOK_SECRET_TOKEN`; a distinct derived token is
+used for each managed bot. Child updates are delivered to a dedicated Celery
+task, so no Celery Beat process is required.
 
 The default external Docker network is `tgbot-queue_default`. If the root
 Compose project uses another project name, set `GATEWAY_NETWORK` accordingly.

@@ -94,10 +94,13 @@ cache_folder = Path(__file__).parent / ".cache"
 class BotRepository:
     """Managed bot operations, independent of the admin dialogue."""
 
-    def __init__(self, api, repository, owner_id):
+    def __init__(self, api, repository, owner_id, child_webhook_url=None, child_webhook_secret=None, webhook_required=False):
         self.api = api
         self.repo = repository
         self.owner = owner_id
+        self.child_webhook_url = child_webhook_url
+        self.child_webhook_secret = child_webhook_secret
+        self.webhook_required = webhook_required
 
     def find_recipient(self, recipient_id):
         existing = next(
@@ -165,6 +168,7 @@ class BotRepository:
             "manager_username": self.api.call("getMe")["username"],
             "owner_id": self.owner,
         }
+        self.configure_webhook(record)
         if existing:
             if record.get("access_status") == "configured":
                 # Records activated before access modes were introduced were
@@ -176,6 +180,27 @@ class BotRepository:
         self.repo.delete(pending_key)
         return record
 
+    def configure_webhook(self, record):
+        # Direct repository users (including unit tests) may opt out. The
+        # production factory below always supplies both values.
+        if (
+            not self.webhook_required
+            and self.child_webhook_url is None
+            and self.child_webhook_secret is None
+        ):
+            return
+        if not self.child_webhook_url or not self.child_webhook_secret:
+            raise RuntimeError(
+                "ADMIN_BOT_CHILD_WEBHOOK_URL and WEBHOOK_SECRET_TOKEN are required "
+                "to register a managed bot"
+            )
+        TelegramAPI(record["token"]).call(
+            "setWebhook",
+            url=f"{self.child_webhook_url.rstrip('/')}/{record['bot_id']}",
+            secret_token=self.child_webhook_secret(record["bot_id"]),
+            allowed_updates=["message"],
+        )
+
     def prepare_claim(self, record):
         self.api.call(
             "setManagedBotAccessSettings",
@@ -184,7 +209,6 @@ class BotRepository:
         )
         record["access_status"] = "awaiting_claim"
         self.ensure_claim_token(record)
-        record.setdefault("claim_update_offset", 0)
         self.repo.put(f"bot:{record['bot_id']}", record)
 
     def restore_claim(self, record):
@@ -339,52 +363,6 @@ class BotRepository:
         return self.activate_claim(record, message.get("from", {}), token)
 
 
-def process_claim_updates(notify_claim) -> int:
-    """Poll unclaimed managed bots until their one-time link is used."""
-    settings = get_admin_bot_settings()
-    if not settings.token or settings.owner_id <= 0:
-        raise RuntimeError("ADMIN_BOT_TOKEN and ADMIN_BOT_OWNER_ID are required")
-
-    cache_folder.mkdir(mode=0o700, exist_ok=True)
-    repository = Repository(cache_folder / "admin.sqlite3")
-    processed = 0
-    try:
-        service = BotRepository(
-            TelegramAPI(settings.token), repository, settings.owner_id
-        )
-        for record in repository.list_bots():
-            if record.get("access_status") == "configured" or not record.get(
-                "claim_token"
-            ):
-                continue
-            child_api = TelegramAPI(record["token"])
-            try:
-                updates = child_api.call(
-                    "getUpdates",
-                    offset=record.get("claim_update_offset", 0),
-                    timeout=0,
-                    allowed_updates=["message"],
-                )
-            except RuntimeError:
-                logger.exception(
-                    "Could not poll claim updates: bot_id=%s", record["bot_id"]
-                )
-                continue
-
-            for update in updates:
-                record["claim_update_offset"] = update["update_id"] + 1
-                message = update.get("message")
-                if message:
-                    notify_claim(
-                        message, child_api, service.claim_from_message(record, message)
-                    )
-                processed += 1
-            repository.put(f"bot:{record['bot_id']}", record)
-    finally:
-        repository.db.close()
-    return processed
-
-
 def run_bot_operation(callback):
     """Keep each SQLite connection and synchronous API call in one worker thread."""
     settings = get_admin_bot_settings()
@@ -393,8 +371,24 @@ def run_bot_operation(callback):
     cache_folder.mkdir(mode=0o700, exist_ok=True)
     repository = Repository(cache_folder / "admin.sqlite3")
     try:
+        from shared.config import settings as shared_settings
+        from shared.managed_webhook import managed_bot_webhook_secret
+
         return callback(
-            BotRepository(TelegramAPI(settings.token), repository, settings.owner_id)
+            BotRepository(
+                TelegramAPI(settings.token),
+                repository,
+                settings.owner_id,
+                getattr(settings, "child_webhook_url", None),
+                (
+                    lambda bot_id: managed_bot_webhook_secret(
+                        shared_settings.webhook_secret_token, bot_id
+                    )
+                )
+                if shared_settings.webhook_secret_token
+                else None,
+                webhook_required=True,
+            )
         )
     finally:
         repository.db.close()

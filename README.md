@@ -119,7 +119,7 @@ from other bots because they use the same task name and queue.
 
 The admin worker and its persistent SQLite database can also run in their own
 Docker Compose project while using the root gateway and Redis. See
-[`bot_factories/admin_bot/README.md`](bot_factories/admin_bot/README.md) for the
+[`bot_factories/admin_bot/README.md`](bot_factories/admin_bot_vibe/README.md) for the
 startup instructions.
 
 Run `./bot_factories/admin_bot/start_worker.sh` for the local worker setup. In

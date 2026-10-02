@@ -426,76 +426,6 @@ class AdminTest(unittest.TestCase):
         self.assertEqual(saved["access_mode"], "telegram")
         self.assertIn("Защита: Telegram.", routes.describe(saved))
 
-    def test_polling_retries_failed_claim_and_stops_after_success(self):
-        import tempfile
-        from types import SimpleNamespace
-        from pathlib import Path
-        from bot_factories.admin_bot import repository as routes
-        from bot_factories.admin_bot.repository import Repository
-
-        with tempfile.TemporaryDirectory() as folder:
-            cache = Path(folder)
-            repo = Repository(cache / "admin.sqlite3")
-            repo.put(
-                "bot:789",
-                {
-                    "bot_id": 789,
-                    "username": "child_bot",
-                    "token": "child-token",
-                    "recipient_id": 999,
-                    "remaining_seconds": 600,
-                    "access_status": "awaiting_claim",
-                    "claim_token": "one_time_token",
-                },
-            )
-            child = Mock()
-            child.call.side_effect = lambda method, **kw: (
-                [
-                    {
-                        "update_id": kw["offset"],
-                        "message": {
-                            "from": {"id": 456},
-                            "text": "/start claim_one_time_token",
-                        },
-                    }
-                ]
-                if method == "getUpdates"
-                else True
-            )
-            original = self.api.call.side_effect
-
-            def fail(method, **kwargs):
-                if method == "setManagedBotAccessSettings":
-                    raise RuntimeError("unavailable")
-                return original(method, **kwargs)
-
-            with patch.object(routes, "cache_folder", cache), patch.object(
-                routes,
-                "get_admin_bot_settings",
-                return_value=SimpleNamespace(token="admin-token", owner_id=123),
-            ), patch.object(
-                routes,
-                "TelegramAPI",
-                side_effect=lambda token: child if token == "child-token" else self.api,
-            ):
-                self.api.call.side_effect = fail
-                self.assertEqual(routes.process_claim_updates(notify_child_claim), 1)
-                saved = repo.get("bot:789")
-                self.assertEqual(saved["access_status"], "recovery_failed")
-                self.assertEqual(saved["claim_token"], "one_time_token")
-                self.assertEqual(saved["claim_update_offset"], 1)
-                self.api.call.side_effect = original
-                self.assertEqual(routes.process_claim_updates(notify_child_claim), 1)
-                saved = repo.get("bot:789")
-                self.assertEqual(saved["access_status"], "configured")
-                self.assertEqual(saved["recipient_id"], 456)
-                self.assertEqual(saved["remaining_seconds"], 600)
-                self.assertNotIn("claim_token", saved)
-                child.reset_mock()
-                self.assertEqual(routes.process_claim_updates(notify_child_claim), 0)
-                child.call.assert_not_called()
-            repo.db.close()
-
     def test_unassigned_recipient_start_reports_actual_id(self):
         self.repo.put(
             "bot:789",
@@ -815,8 +745,13 @@ class AdminTest(unittest.TestCase):
 
         with patch.object(settings, "telegram_token", "123456:test-token"):
             from bot_factories.admin_bot import celery_app as worker
+        from bot_factories.admin_bot import tasks
+
         app = worker.celery_app
         self.assertEqual(app.conf.task_default_queue, TELEGRAM_UPDATE_QUEUE)
+        self.assertEqual(app.conf.imports, ("bot_factories.admin_bot.tasks",))
+        app.loader.import_task_module("bot_factories.admin_bot.tasks")
+        self.assertIn(tasks.MANAGED_BOT_UPDATES_TASK, app.tasks)
         with patch.object(app, "dp", self.dp), patch.object(
             app, "bot", self.bot
         ), patch.object(
@@ -857,6 +792,30 @@ class AdminTest(unittest.TestCase):
             self.assertEqual(
                 self.repo.get("bot:789")["access_status"], "awaiting_claim"
             )
+
+    def test_managed_bot_task_delivers_update_to_managed_router(self):
+        from bot_factories.admin_bot import tasks
+
+        body = {
+            "update_id": 22,
+            "message": {
+                "message_id": 1,
+                "date": 0,
+                "text": "/start claim_claim-token",
+                "from": {"id": 456, "is_bot": False, "first_name": "Alice"},
+                "chat": {"id": 456, "type": "private"},
+            },
+        }
+        with patch.object(tasks, "managed_bot_token", return_value="123456:child"), patch.object(
+            tasks.managed_bot_dispatcher,
+            "feed_update",
+            new=AsyncMock(return_value={"status": "configured"}),
+        ) as feed_update:
+            result = tasks.managed_bot_updates.run(789, body)
+
+        self.assertEqual(result, {"status": "configured"})
+        self.assertEqual(feed_update.await_args.kwargs["managed_bot_id"], 789)
+        self.assertEqual(feed_update.await_args.kwargs["managed_update_id"], 22)
 
     def test_start_clears_dialogue_and_non_text_budget_is_rejected(self):
         self.message("Выбрать пользователя")

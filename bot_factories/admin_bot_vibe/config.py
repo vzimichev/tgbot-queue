@@ -15,4 +15,5 @@ class AdminBotSettings(BaseSettings):
         extra = "ignore"
 
 
-admin_bot_settings = AdminBotSettings(_env_file=os.getenv("APP_ENV_FILE", ".env"))
+def get_admin_bot_settings() -> AdminBotSettings:
+    return AdminBotSettings(_env_file=os.getenv("APP_ENV_FILE", ".env"))
