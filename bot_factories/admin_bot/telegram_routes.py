@@ -1,7 +1,7 @@
 import asyncio
 
 from aiogram import F, Router
-from aiogram.filters import StateFilter
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
@@ -23,6 +23,14 @@ class AdminFlow(StatesGroup):
     choosing_recipient = State()
     entering_initial_limit = State()
     entering_additional_limit = State()
+
+
+@admin_router.message(Command("start"))
+async def start(message: Message, state: FSMContext) -> None:
+    """Reset an interrupted admin dialogue and show its entry action."""
+    await state.clear()
+    await state.set_state(AdminFlow.choosing_recipient)
+    await message.answer("Choose one Telegram user to manage.")
 
 
 @admin_router.callback_query(F.data.startswith("limit:"))
