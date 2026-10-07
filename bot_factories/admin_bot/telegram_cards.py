@@ -16,6 +16,8 @@ from bot_factories.admin_bot.repositories.bot_activation import (
     ManagedBotActivationService,
 )
 
+LIMIT_PRESETS_SECONDS = (10, 100, 1000)
+
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     """Return the entry keyboard for the admin dialogue."""
@@ -128,7 +130,7 @@ def parse_limit_action(
 
     if amount_text == "custom":
         return int(bot_id_text), None
-    if amount_text not in {"10", "100", "1000"}:
+    if amount_text not in {str(seconds) for seconds in LIMIT_PRESETS_SECONDS}:
         return None
     return int(bot_id_text), int(amount_text)
 
@@ -153,32 +155,58 @@ def bot_card_text(bot: ManagedBotRow) -> str:
     )
 
 
+def bot_link(bot: ManagedBotRow) -> str:
+    activation_link = ManagedBotActivationService.activation_link(bot)
+    if bot.status != ManagedBotStatus.ACTIVE and activation_link:
+        return activation_link
+    return f"https://t.me/{bot.username}"
+
+
+def invitation_text(bot: ManagedBotRow, link: str) -> str:
+    if bot.status != ManagedBotStatus.ACTIVE:
+        return (
+            "Your personal bot is ready.\n"
+            f"Limit: {bot.remaining_seconds} seconds.\n"
+            f"Get your bot: {link}"
+        )
+    return (
+        f'You have been assigned the bot “{bot.name or bot.username}”.\n'
+        f"Remaining limit: {bot.remaining_seconds} seconds.\n"
+        f"{link}"
+    )
+
+
+def invitation_button(bot: ManagedBotRow) -> InlineKeyboardButton:
+    link = bot_link(bot)
+    text = invitation_text(bot, link)
+    if bot.recipient_username:
+        username = bot.recipient_username.lstrip("@")
+        return InlineKeyboardButton(
+            text="Send to recipient",
+            url=f"https://t.me/{username}?" + urlencode({"text": text}, quote_via=quote),
+        )
+    return InlineKeyboardButton(
+        text="Share link",
+        url="https://t.me/share/url?"
+        + urlencode(
+            {"url": link, "text": text.replace(link, "").strip()},
+            quote_via=quote,
+        ),
+    )
+
+
 def bot_card_keyboard(bot: ManagedBotRow) -> InlineKeyboardMarkup:
     rows = []
     if bot.telegram_bot_id is not None:
-        invitation = (
-            ManagedBotActivationService.activation_link(bot)
-            if bot.status != ManagedBotStatus.ACTIVE
-            else f"https:/ /t.me/{bot.username}"
-        )
-        invitation = invitation or f"https://t.me/{bot.username}"
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=("Share activation link" if bot.claim_token else "Invite"),
-                    url="https://t.me/share/url?"
-                    + urlencode({"url": invitation}, quote_via=quote),
-                )
-            ]
-        )
+        rows.append([invitation_button(bot)])
     rows.extend(
         [
             [
-                InlineKeyboardButton(text="+10", callback_data=f"limit:{bot.id}:10"),
-                InlineKeyboardButton(text="+100", callback_data=f"limit:{bot.id}:100"),
                 InlineKeyboardButton(
-                    text="+1000", callback_data=f"limit:{bot.id}:1000"
-                ),
+                    text=f"+{seconds}",
+                    callback_data=f"limit:{bot.id}:{seconds}",
+                )
+                for seconds in LIMIT_PRESETS_SECONDS
             ],
             [
                 InlineKeyboardButton(
