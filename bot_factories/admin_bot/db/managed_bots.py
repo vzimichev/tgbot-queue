@@ -10,6 +10,20 @@ class ManagedBotStatus(StrEnum):
     ERROR = "error"
 
 
+class ManagedBotAccessMode(StrEnum):
+    TELEGRAM = "telegram"
+    APPLICATION = "application"
+
+
+class ActivationResult(StrEnum):
+    CONFIGURED = "configured"
+    INVALID = "invalid"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+    IGNORED = "ignored"
+    DUPLICATE = "duplicate"
+
+
 @dataclass
 class ManagedBotRow:
     id: int
@@ -21,6 +35,11 @@ class ManagedBotRow:
     recipient_name: str | None
     remaining_seconds: int
     status: ManagedBotStatus
+    child_bot_token: str | None = None
+    claim_token: str | None = None
+    claim_webhook_update_id: int | None = None
+    access_mode: ManagedBotAccessMode | None = None
+    activation_error: str | None = None
 
 
 class ManagedBotsCrud:
@@ -39,6 +58,15 @@ class ManagedBotsCrud:
             recipient_name=row["recipient_name"],
             remaining_seconds=row["remaining_seconds"],
             status=ManagedBotStatus(row["status"]),
+            child_bot_token=row["child_bot_token"],
+            claim_token=row["claim_token"],
+            claim_webhook_update_id=row["claim_webhook_update_id"],
+            access_mode=(
+                ManagedBotAccessMode(row["access_mode"])
+                if row["access_mode"] is not None
+                else None
+            ),
+            activation_error=row["activation_error"],
         )
 
     def _get_by_id(self, bot_id: int) -> ManagedBotRow | None:
@@ -58,8 +86,13 @@ class ManagedBotsCrud:
                 recipient_username,
                 recipient_name,
                 remaining_seconds,
-                status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                status,
+                child_bot_token,
+                claim_token,
+                claim_webhook_update_id,
+                access_mode,
+                activation_error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 bot.telegram_bot_id,
@@ -70,6 +103,11 @@ class ManagedBotsCrud:
                 bot.recipient_name,
                 bot.remaining_seconds,
                 bot.status,
+                bot.child_bot_token,
+                bot.claim_token,
+                bot.claim_webhook_update_id,
+                bot.access_mode,
+                bot.activation_error,
             ),
         )
         return replace(bot, id=cursor.lastrowid)
@@ -80,6 +118,18 @@ class ManagedBotsCrud:
     def get_by_recipient_id(self, recipient_id: int) -> ManagedBotRow | None:
         row = self.connection.execute(
             "SELECT * FROM managed_bots WHERE recipient_id = ?", (recipient_id,)
+        ).fetchone()
+        return self._to_managed_bot(row) if row else None
+
+    def get_by_telegram_bot_id(self, telegram_bot_id: int) -> ManagedBotRow | None:
+        row = self.connection.execute(
+            "SELECT * FROM managed_bots WHERE telegram_bot_id = ?", (telegram_bot_id,)
+        ).fetchone()
+        return self._to_managed_bot(row) if row else None
+
+    def get_by_claim_token(self, claim_token: str) -> ManagedBotRow | None:
+        row = self.connection.execute(
+            "SELECT * FROM managed_bots WHERE claim_token = ?", (claim_token,)
         ).fetchone()
         return self._to_managed_bot(row) if row else None
 
@@ -107,7 +157,12 @@ class ManagedBotsCrud:
                 recipient_username = ?,
                 recipient_name = ?,
                 remaining_seconds = ?,
-                status = ?
+                status = ?,
+                child_bot_token = ?,
+                claim_token = ?,
+                claim_webhook_update_id = ?,
+                access_mode = ?,
+                activation_error = ?
             WHERE id = ?
             """,
             (
@@ -119,6 +174,11 @@ class ManagedBotsCrud:
                 bot.recipient_name,
                 bot.remaining_seconds,
                 bot.status,
+                bot.child_bot_token,
+                bot.claim_token,
+                bot.claim_webhook_update_id,
+                bot.access_mode,
+                bot.activation_error,
                 bot.id,
             ),
         )
@@ -138,6 +198,3 @@ class ManagedBotsCrud:
             (seconds, bot_id),
         )
         return self._get_by_id(bot_id)
-
-
-

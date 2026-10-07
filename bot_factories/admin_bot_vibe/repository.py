@@ -94,7 +94,15 @@ cache_folder = Path(__file__).parent / ".cache"
 class BotRepository:
     """Managed bot operations, independent of the admin dialogue."""
 
-    def __init__(self, api, repository, owner_id, child_webhook_url=None, child_webhook_secret=None, webhook_required=False):
+    def __init__(
+        self,
+        api,
+        repository,
+        owner_id,
+        child_webhook_url=None,
+        child_webhook_secret=None,
+        webhook_required=False,
+    ):
         self.api = api
         self.repo = repository
         self.owner = owner_id
@@ -381,12 +389,14 @@ def run_bot_operation(callback):
                 settings.owner_id,
                 getattr(settings, "child_webhook_url", None),
                 (
-                    lambda bot_id: managed_bot_webhook_secret(
-                        shared_settings.webhook_secret_token, bot_id
+                    (
+                        lambda bot_id: managed_bot_webhook_secret(
+                            shared_settings.webhook_secret_token, bot_id
+                        )
                     )
-                )
-                if shared_settings.webhook_secret_token
-                else None,
+                    if shared_settings.webhook_secret_token
+                    else None
+                ),
                 webhook_required=True,
             )
         )

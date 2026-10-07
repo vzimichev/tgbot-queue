@@ -11,7 +11,10 @@ from aiogram.types import (
 )
 from dataclasses import dataclass
 
-from bot_factories.admin_bot.crud import ManagedBotRow, ManagedBotStatus
+from bot_factories.admin_bot.db.managed_bots import ManagedBotRow, ManagedBotStatus
+from bot_factories.admin_bot.repositories.bot_activation import (
+    ManagedBotActivationService,
+)
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -107,6 +110,8 @@ def managed_bot_creation_card(bot: ManagedBotRow, request_id: int) -> UserCard:
             one_time_keyboard=True,
         ),
     )
+
+
 def parse_limit_action(
     callback_data: str | None,
 ) -> tuple[int, int | None] | None:
@@ -151,11 +156,16 @@ def bot_card_text(bot: ManagedBotRow) -> str:
 def bot_card_keyboard(bot: ManagedBotRow) -> InlineKeyboardMarkup:
     rows = []
     if bot.telegram_bot_id is not None:
-        invitation = f"https://t.me/{bot.username}"
+        invitation = (
+            ManagedBotActivationService.activation_link(bot)
+            if bot.status != ManagedBotStatus.ACTIVE
+            else f"https:/ /t.me/{bot.username}"
+        )
+        invitation = invitation or f"https://t.me/{bot.username}"
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="Invite",
+                    text=("Share activation link" if bot.claim_token else "Invite"),
                     url="https://t.me/share/url?"
                     + urlencode({"url": invitation}, quote_via=quote),
                 )

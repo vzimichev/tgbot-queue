@@ -9,7 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, ManagedBotUpdated, Message
 from bot_factories.admin_bot.config import admin_bot_settings
 
-from bot_factories.admin_bot.telegram_views import (
+from bot_factories.admin_bot.telegram_cards import (
     main_menu_keyboard,
     back_keyboard,
     managed_bot_creation_card,
@@ -19,11 +19,19 @@ from bot_factories.admin_bot.telegram_views import (
     show_bot_card,
     user_card,
 )
-from bot_factories.admin_bot.crud import ManagedBotStatus
-from bot_factories.admin_bot.repositories import ManagedBotsRepository
+from bot_factories.admin_bot.db.managed_bots import ManagedBotStatus
+from bot_factories.admin_bot.repositories.bot_activation import (
+    ManagedBotActivationService,
+)
+from bot_factories.admin_bot.integrations.telegram_api import ManagedBotTelegramApi
+from bot_factories.admin_bot.repositories.managed_bots import ManagedBotsRepository
 
 
 managed_bots_repository = ManagedBotsRepository()
+activation_service = ManagedBotActivationService(
+    managed_bots_repository,
+    ManagedBotTelegramApi(),
+)
 
 
 def is_owner(event: Message | CallbackQuery) -> bool:
@@ -36,7 +44,9 @@ def is_owner(event: Message | CallbackQuery) -> bool:
         and message.chat.id == user.id
     )
 
+
 admin_router = Router()
+managed_bot_router = Router()
 admin_router.message.filter(is_owner)
 admin_router.callback_query.filter(is_owner)
 
@@ -47,6 +57,7 @@ class AdminFlow(StatesGroup):
                 ├─(if user's bot found)─> entering_additional_limit
                 └─(if not)─> creating_bot -> entering_initial_limit
     """
+
     choosing_recipient = State()
     creating_bot = State()
     entering_initial_limit = State()
@@ -100,6 +111,7 @@ async def list_bots(message: Message, state: FSMContext) -> None:
         reply_markup=main_menu_keyboard(),
     )
     for managed_bot in bots:
+        managed_bot = await recover_card_activation(managed_bot)
         await show_bot_card(message, managed_bot)
 
 
@@ -164,6 +176,8 @@ async def receive_recipient(message: Message, state: FSMContext) -> None:
         card = managed_bot_creation_card(existing_bot, secrets.randbelow(2**31))
         await message.answer(card.text, reply_markup=card.reply_markup)
         return
+    if existing_bot is not None:
+        existing_bot = await recover_card_activation(existing_bot)
 
     card = user_card(
         user.user_id,
@@ -267,6 +281,11 @@ async def register_managed_bot(event: ManagedBotUpdated, bot: Bot) -> None:
             created.username or "",
             created.first_name or created.username or "",
         )
+        if record is not None:
+            record = await asyncio.to_thread(
+                activation_service.prepare_activation,
+                record.id,
+            )
     except (RuntimeError, ValueError):
         await bot.send_message(
             event.user.id,
@@ -286,6 +305,48 @@ async def register_managed_bot(event: ManagedBotUpdated, bot: Bot) -> None:
         bot_card_text(record),
         reply_markup=bot_card_keyboard(record),
     )
+
+
+async def recover_card_activation(record):
+    if record.status == ManagedBotStatus.ACTIVE or record.telegram_bot_id is None:
+        return record
+    if (
+        record.status == ManagedBotStatus.AWAITING_ACTIVATION
+        and record.claim_token
+        and record.child_bot_token
+    ):
+        return record
+    return await asyncio.to_thread(activation_service.recover_activation, record.id)
+
+
+@managed_bot_router.message()
+async def process_managed_bot_message(
+    message: Message,
+    managed_bot_id: int,
+    managed_update_id: int,
+) -> dict[str, str]:
+    if message.from_user is None:
+        return {"status": "ignored"}
+
+    result = await asyncio.to_thread(
+        activation_service.handle_claim,
+        telegram_bot_id=managed_bot_id,
+        update_id=managed_update_id,
+        command_text=message.text,
+        claimant_id=message.from_user.id,
+        claimant_username=message.from_user.username,
+        claimant_name=message.from_user.first_name,
+    )
+    texts = {
+        "configured": "Access activated. You can now use your personal bot.",
+        "invalid": "Use the personal activation link that was sent to you.",
+        "failed": "Access could not be activated. Please try the link again later.",
+        "blocked": "Activation could not be completed. Contact the administrator.",
+    }
+    text = texts.get(result.value)
+    if text:
+        await message.answer(text)
+    return {"status": result.value}
 
 
 def _parse_seconds(text: str | None) -> int | None:

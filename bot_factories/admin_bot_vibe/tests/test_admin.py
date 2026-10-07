@@ -806,7 +806,9 @@ class AdminTest(unittest.TestCase):
                 "chat": {"id": 456, "type": "private"},
             },
         }
-        with patch.object(tasks, "managed_bot_token", return_value="123456:child"), patch.object(
+        with patch.object(
+            tasks, "managed_bot_token", return_value="123456:child"
+        ), patch.object(
             tasks.managed_bot_dispatcher,
             "feed_update",
             new=AsyncMock(return_value={"status": "configured"}),

@@ -53,7 +53,9 @@ async def telegram_webhook(
     return TelegramWebhookResponse(ok=True, detail="Message queued for processing")
 
 
-@webhook_router.post("/webhook/managed/{bot_id}", response_model=TelegramWebhookResponse)
+@webhook_router.post(
+    "/webhook/managed/{bot_id}", response_model=TelegramWebhookResponse
+)
 async def managed_bot_webhook(
     bot_id: int,
     body: dict[str, Any] = Body(...),
@@ -66,8 +68,10 @@ async def managed_bot_webhook(
         if settings.webhook_secret_token
         else None
     )
-    if not expected_secret or not telegram_secret_token or not hmac.compare_digest(
-        telegram_secret_token, expected_secret
+    if (
+        not expected_secret
+        or not telegram_secret_token
+        or not hmac.compare_digest(telegram_secret_token, expected_secret)
     ):
         logger.warning("Forbidden managed-bot webhook: bot_id=%s", bot_id)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")

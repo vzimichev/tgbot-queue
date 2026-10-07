@@ -3,16 +3,11 @@ import sqlite3
 from dataclasses import replace
 
 from bot_factories.admin_bot.db.db_engine import transaction, transactional
-from bot_factories.admin_bot.crud import (
+from bot_factories.admin_bot.db.managed_bots import (
     ManagedBotRow,
     ManagedBotStatus,
     ManagedBotsCrud,
 )
-from bot_factories.admin_bot.integrations.telegram_api import (
-    configure_managed_bot_webhook,
-    get_managed_bot_token,
-)
-
 
 SUGGESTED_BOT_NAME = "My faceswap bot"
 
@@ -26,6 +21,15 @@ class ManagedBotsRepository:
         connection: sqlite3.Connection,
     ) -> ManagedBotRow | None:
         return ManagedBotsCrud(connection).get_by_recipient_id(recipient_id)
+
+    @transactional
+    def get_by_telegram_bot_id(
+        self,
+        telegram_bot_id: int,
+        *,
+        connection: sqlite3.Connection,
+    ) -> ManagedBotRow | None:
+        return ManagedBotsCrud(connection).get_by_telegram_bot_id(telegram_bot_id)
 
     @transactional
     def get_bot(
@@ -105,8 +109,6 @@ class ManagedBotsRepository:
                 return bot
             raise ValueError("The suggested username is already registered")
 
-        bot_token = get_managed_bot_token(telegram_bot_id)
-        configure_managed_bot_webhook(bot_token, telegram_bot_id)
         registered_bot = replace(
             bot,
             telegram_bot_id=telegram_bot_id,
@@ -116,6 +118,15 @@ class ManagedBotsRepository:
         )
         with transaction() as connection:
             return ManagedBotsCrud(connection).update(registered_bot)
+
+    @transactional
+    def save(
+        self,
+        bot: ManagedBotRow,
+        *,
+        connection: sqlite3.Connection,
+    ) -> ManagedBotRow:
+        return ManagedBotsCrud(connection).update(bot)
 
     @transactional
     def add_limit(

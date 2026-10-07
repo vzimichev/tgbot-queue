@@ -38,8 +38,7 @@ def configure_managed_bot_webhook(
         bot_token,
         "setWebhook",
         url=(
-            f"{admin_bot_settings.child_webhook_url.rstrip('/')}"
-            f"/{telegram_bot_id}"
+            f"{admin_bot_settings.child_webhook_url.rstrip('/')}" f"/{telegram_bot_id}"
         ),
         secret_token=managed_bot_webhook_secret(
             settings.webhook_secret_token,
@@ -47,6 +46,45 @@ def configure_managed_bot_webhook(
         ),
         allowed_updates=["message"],
     )
+
+
+class ManagedBotTelegramApi:
+    """Telegram calls used by the managed-bot activation lifecycle."""
+
+    def get_managed_bot_token(self, telegram_bot_id: int) -> str:
+        return get_managed_bot_token(telegram_bot_id)
+
+    def configure_child_webhook(
+        self, child_bot_token: str, telegram_bot_id: int
+    ) -> None:
+        configure_managed_bot_webhook(child_bot_token, telegram_bot_id)
+
+    def set_access_open(self, telegram_bot_id: int) -> None:
+        _call(
+            _admin_bot_token(),
+            "setManagedBotAccessSettings",
+            user_id=telegram_bot_id,
+            is_access_restricted=False,
+        )
+
+    def restrict_access(self, telegram_bot_id: int, recipient_id: int) -> None:
+        _call(
+            _admin_bot_token(),
+            "setManagedBotAccessSettings",
+            user_id=telegram_bot_id,
+            is_access_restricted=True,
+            added_user_ids=[recipient_id],
+        )
+
+    def get_access_settings(self, telegram_bot_id: int) -> dict[str, Any]:
+        result = _call(
+            _admin_bot_token(),
+            "getManagedBotAccessSettings",
+            user_id=telegram_bot_id,
+        )
+        if not isinstance(result, dict):
+            raise RuntimeError("Telegram API returned invalid access settings")
+        return result
 
 
 def _admin_bot_token() -> str:
