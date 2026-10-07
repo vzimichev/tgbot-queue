@@ -4,7 +4,11 @@ from unittest.mock import patch
 from aiogram import Router
 
 from shared.config import settings
-from worker.celery_factory import CeleryFactory, TELEGRAM_UPDATE_QUEUE, TELEGRAM_UPDATE_TASK
+from worker.celery_factory import (
+    CeleryFactory,
+    TELEGRAM_UPDATE_QUEUE,
+    TELEGRAM_UPDATE_TASK,
+)
 
 
 class CeleryFactoryTest(unittest.TestCase):

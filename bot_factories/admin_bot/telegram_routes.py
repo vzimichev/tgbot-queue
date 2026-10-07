@@ -1,524 +1,385 @@
 import asyncio
 import secrets
-from urllib.parse import quote, urlencode
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandObject, Filter
+from aiogram.client.bot import Bot
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, ManagedBotUpdated, CallbackQuery
+from aiogram.types import CallbackQuery, ManagedBotUpdated, Message
+from bot_factories.admin_bot.config import admin_bot_settings
 
-from bot_factories.admin_bot.config import get_admin_bot_settings
-from bot_factories.admin_bot.repository import run_bot_operation
+from bot_factories.admin_bot.telegram_cards import (
+    main_menu_keyboard,
+    back_keyboard,
+    managed_bot_creation_card,
+    parse_limit_action,
+    bot_card_keyboard,
+    bot_card_text,
+    show_bot_card,
+    user_card,
+)
+from bot_factories.admin_bot.db.managed_bots import ManagedBotStatus
+from bot_factories.admin_bot.repositories.bot_activation import (
+    ManagedBotActivationService,
+)
+from bot_factories.admin_bot.telegram_api import ManagedBotTelegramApi
+from bot_factories.admin_bot.repositories.managed_bots import ManagedBotsRepository
+
+
+managed_bots_repository = ManagedBotsRepository()
+activation_service = ManagedBotActivationService(
+    managed_bots_repository,
+    ManagedBotTelegramApi(),
+)
+
+
+def is_owner(event: Message | CallbackQuery) -> bool:
+    user = event.from_user
+    message = event if isinstance(event, Message) else event.message
+    return bool(
+        user
+        and message
+        and user.id == admin_bot_settings.owner_id
+        and message.chat.id == user.id
+    )
+
 
 admin_router = Router()
-RECIPIENT_REQUEST_ID = 1
+managed_bot_router = Router()
+admin_router.message.filter(is_owner)
+admin_router.callback_query.filter(is_owner)
 
 
-class Creation(StatesGroup):
-    card = State()
-    seconds = State()
-    add_limit = State()
+class AdminFlow(StatesGroup):
+    """
+    choosing_recipient
+                ├─(if user's bot found)─> entering_additional_limit
+                └─(if not)─> creating_bot -> entering_initial_limit
+    """
+
+    choosing_recipient = State()
+    creating_bot = State()
+    entering_initial_limit = State()
+    entering_additional_limit = State()
 
 
-class Owner(Filter):
-    async def __call__(self, message: Message):
-        owner = get_admin_bot_settings().owner_id
-        return bool(
-            message.from_user
-            and message.from_user.id == owner
-            and message.chat.id == owner
-        )
+@admin_router.message(Command("start"))
+async def start(message: Message, state: FSMContext) -> None:
+    """Reset an interrupted admin dialogue and show its entry action."""
+    await show_main_menu(message, state)
 
 
-async def operation(callback):
-    return await asyncio.to_thread(run_bot_operation, callback)
-
-
-async def answer(message, text, reply_markup=None):
-    await message.answer(text, reply_markup=reply_markup, parse_mode=None)
-
-
-def main_keyboard():
-    return {
-        "keyboard": [
-            [
-                {
-                    "text": "Выбрать пользователя",
-                    "request_users": {
-                        "request_id": RECIPIENT_REQUEST_ID,
-                        "user_is_bot": False,
-                        "max_quantity": 1,
-                        "request_username": True,
-                        "request_name": True,
-                    },
-                }
-            ],
-            [{"text": "Все боты"}],
-        ],
-        "resize_keyboard": True,
-    }
-
-
-def cancel_keyboard():
-    return {"keyboard": [[{"text": "Назад"}]], "resize_keyboard": True}
-
-
-def invitation(bot):
-    link = activation_link(bot)
-    if bot.get("access_status") != "configured" and link:
-        return "Ваш персональный бот готов.\n" f"Получить бота: {link}"
-    invitation = (
-        f"Тебе выделен бот «{bot.get('name') or bot['username']}».\n"
-        f"Бюджет: {bot.get('budget_seconds', bot['remaining_seconds'])} секунд видео.\n"
-        f"https://t.me/{bot['username']}"
+async def show_main_menu(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(AdminFlow.choosing_recipient)
+    await message.answer(
+        "Choose an action.",
+        reply_markup=main_menu_keyboard(),
     )
-    return invitation
 
 
-def activation_link(bot):
-    username = bot.get("username")
-    claim_token = bot.get("claim_token")
-    if username and claim_token:
-        return f"https://t.me/{username}?start=claim_{claim_token}"
-    return None
+@admin_router.message(F.text == "Back")
+async def back_to_menu(message: Message, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    data = await state.get_data()
+
+    if current_state == AdminFlow.entering_initial_limit.state:
+        recipient_id = data.get("recipient_id")
+        if isinstance(recipient_id, int):
+            await state.set_state(AdminFlow.creating_bot)
+            card = user_card(
+                recipient_id,
+                data.get("recipient_username"),
+                data.get("recipient_name"),
+                None,
+            )
+            await message.answer(card.text, reply_markup=card.reply_markup)
+            return
+
+    if current_state == AdminFlow.entering_additional_limit.state:
+        bot_id = data.get("bot_id")
+        if isinstance(bot_id, int):
+            managed_bot = await asyncio.to_thread(
+                managed_bots_repository.get_bot,
+                bot_id,
+            )
+            if managed_bot is not None:
+                await state.clear()
+                await show_bot_card(message, managed_bot)
+                return
+
+    await show_main_menu(message, state)
 
 
-def share_keyboard(bot):
-    return recipient_keyboard(bot, invitation(bot))
-
-
-def recipient_keyboard(bot, invitation):
-    recipient = bot.get("recipient_username")
-    if recipient:
-        url = f"https://t.me/{recipient}?" + urlencode(
-            {"text": invitation}, quote_via=quote
-        )
-        return {
-            "inline_keyboard": [
-                [
-                    {
-                        "text": "Отправить пользователю",
-                        "url": url,
-                    }
-                ]
-            ]
-        }
-    link = bot_link(bot)
-    return {
-        "inline_keyboard": [
-            [
-                {
-                    "text": "Поделиться ссылкой",
-                    "url": "https://t.me/share/url?"
-                    + urlencode(
-                        {"url": link, "text": invitation.replace(link, "").strip()},
-                        quote_via=quote,
-                    ),
-                }
-            ]
-        ]
-    }
-
-
-def bot_link(bot):
-    if bot.get("access_status") != "configured" and activation_link(bot):
-        return activation_link(bot)
-    return f"https://t.me/{bot['username']}"
-
-
-def recipient_label(bot):
-    if bot.get("recipient_username"):
-        return "@" + bot["recipient_username"]
-    return bot.get("recipient_name") or str(bot.get("recipient_id", "не указан"))
-
-
-def describe(bot):
-    status = (
-        "Бот активирован."
-        if bot.get("access_status") == "configured"
-        else "Бот ожидает активации."
-    )
-    return f"Пользователь: {recipient_label(bot)}\n{status}\nОсталось: {bot['remaining_seconds']} секунд."
-
-
-def card_keyboard(bot):
-    rows = share_keyboard(bot)["inline_keyboard"]
-    return {
-        "inline_keyboard": rows
-        + [
-            [{"text": "Добавить лимит", "callback_data": f"limit:{bot['bot_id']}"}],
-            [{"text": "Назад", "callback_data": "card:back"}],
-        ]
-    }
-
-
-@admin_router.callback_query(F.data == "card:back")
-async def card_back(query: CallbackQuery, state: FSMContext):
-    if (
-        query.from_user.id != get_admin_bot_settings().owner_id
-        or not query.message
-        or query.message.chat.id != query.from_user.id
-    ):
+@admin_router.callback_query(F.data == "menu:back")
+async def card_back_to_menu(query: CallbackQuery, state: FSMContext) -> None:
+    if query.message is None:
         await query.answer()
         return
+
     await query.answer()
-    await show_menu(query.message, state)
+    await show_main_menu(query.message, state)
+
+
+@admin_router.message(F.text == "All bots")
+async def list_bots(message: Message, state: FSMContext) -> None:
+    """Show cards for every managed bot, abandoning any unfinished dialogue."""
+    await state.clear()
+    bots = await asyncio.to_thread(managed_bots_repository.list_bots)
+    if not bots:
+        await message.answer(
+            "No bots have been created yet.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    await message.answer(
+        "All bots:",
+        reply_markup=main_menu_keyboard(),
+    )
+    for managed_bot in bots:
+        managed_bot = await recover_card_activation(managed_bot)
+        await show_bot_card(message, managed_bot)
 
 
 @admin_router.callback_query(F.data.startswith("limit:"))
-async def card_limit(query: CallbackQuery, state: FSMContext):
-    if (
-        query.from_user.id != get_admin_bot_settings().owner_id
-        or not query.message
-        or query.message.chat.id != query.from_user.id
-    ):
+async def handle_limit(query: CallbackQuery, state: FSMContext) -> None:
+    if query.message is None or query.data is None:
         await query.answer()
         return
-    value = query.data.split(":", 1)[1]
-    record = (
-        await operation(lambda bots: bots.repo.get(f"bot:{value}"))
-        if value.isascii() and value.isdigit()
-        else None
-    )
-    if not record:
-        await query.answer("Бот не найден.")
+
+    parsed_action = parse_limit_action(query.data)
+    if parsed_action is None:
+        await query.answer("Invalid limit action.")
         return
+
+    bot_id, seconds_to_add = parsed_action
+    if seconds_to_add is None:
+        bot = await asyncio.to_thread(
+            managed_bots_repository.get_bot,
+            bot_id,
+        )
+        if bot is None:
+            await query.answer("Bot not found.")
+            return
+
+        await query.answer()
+        await state.set_data(bot_id=bot.id)
+        await state.set_state(AdminFlow.entering_additional_limit)
+        await query.message.answer(
+            "Send the number of seconds to add.",
+            reply_markup=back_keyboard(),
+        )
+        return
+
+    try:
+        bot = await asyncio.to_thread(
+            managed_bots_repository.add_limit,
+            bot_id,
+            seconds_to_add,
+        )
+    except LookupError:
+        await query.answer("Bot not found.")
+        return
+
     await query.answer()
-    await state.set_data(
-        {
-            "key": f"bot:{record['bot_id']}",
-            **{
-                key: record[key]
-                for key in ("recipient_id", "recipient_username", "recipient_name")
-                if key in record
-            },
-        }
-    )
-    await state.set_state(Creation.add_limit)
-    await answer(query.message, "Сколько секунд добавить к лимиту?", cancel_keyboard())
+    await show_bot_card(query.message, bot)
 
 
-async def send_creation_request(message, pending):
-    await answer(
-        message,
-        f"Название: {pending['name']}\nUsername: @{pending['username']}\n"
-        f"Кому: {recipient_label(pending)}\n"
-        f"Бюджет: {pending['budget_seconds']} секунд.\n"
-        "Подтверди создание в Telegram. Сохрани предложенный @username, "
-        "чтобы привязать параметры к боту.",
-        reply_markup={
-            "keyboard": [
-                [
-                    {
-                        "text": "Создать в Telegram",
-                        "request_managed_bot": {
-                            "request_id": secrets.randbelow(2**31),
-                            "suggested_name": pending["name"],
-                            "suggested_username": pending["username"],
-                        },
-                    }
-                ],
-                [{"text": "Назад"}],
-            ],
-            "resize_keyboard": True,
-            "one_time_keyboard": True,
-        },
-    )
-
-
-@admin_router.message(Command("start"), F.chat.type == "private")
-async def start(message: Message, state: FSMContext, command: CommandObject):
-    if message.from_user.id == get_admin_bot_settings().owner_id:
-        await show_menu(message, state)
-        return
-    if command.args and command.args.startswith("claim_"):
-        token = command.args[len("claim_") :]
-        sender = message.from_user.model_dump(exclude_none=True)
-
-        def activate(bots):
-            record = bots.find_claim(token)
-            return record, bots.activate_claim(record, sender, token)
-
-        record, result = await operation(activate)
-        if result == "invalid":
-            await answer(message, "Ссылка недействительна или уже использована.")
-        elif result == "blocked":
-            await answer(
-                message,
-                "Активация не завершена. Восстановить доступ для повторного входа не удалось. Обратись к администратору.",
-            )
-        elif result == "failed":
-            await answer(
-                message, "Не удалось активировать доступ. Попробуй ещё раз позже."
-            )
-        else:
-            await answer(
-                message,
-                "Готово! Доступ активирован.",
-                open_bot_keyboard(record, "Открыть моего бота"),
-            )
-        return
-    records = await operation(lambda bots: bots.repo.list_bots())
-    assigned = [
-        record
-        for record in records
-        if record.get("recipient_id") == message.from_user.id
-    ]
-    for record in assigned:
-        if await operation(lambda bots: bots.grant_access(record)):
-            await answer(
-                message,
-                invitation(record),
-                open_bot_keyboard(record, "Открыть своего бота"),
-            )
-        else:
-            await answer(
-                message,
-                "Доступ пока не удалось настроить. Открой бота по ссылке ещё раз.",
-            )
-    if records and not assigned:
-        await answer(
-            message,
-            "Этот аккаунт не назначен получателем бота. "
-            f"Твой Telegram ID: {message.from_user.id}. "
-            "Передай его владельцу, чтобы он проверил выбор пользователя.",
-        )
-
-
-def open_bot_keyboard(record, text):
-    return {
-        "inline_keyboard": [
-            [{"text": text, "url": f"https://t.me/{record['username']}"}]
-        ]
-    }
-
-
-async def show_menu(message: Message, state: FSMContext):
-    await state.clear()
-    await answer(
-        message,
-        "Выбери действие с помощью кнопок ниже.\n"
-        "Бюджет задаётся в секундах и не списывается.",
-        main_keyboard(),
-    )
-
-
-@admin_router.message(Owner(), F.text == "Назад")
-async def back(message: Message, state: FSMContext):
-    data = await state.get_data()
-    if await state.get_state() in (
-        Creation.seconds.state,
-        Creation.add_limit.state,
-    ) and data.get("recipient_id"):
-        await show_card(message, state, data)
-    else:
-        await show_menu(message, state)
-
-
-@admin_router.message(Owner(), F.text == "Все боты")
-async def list_bots(message: Message, state: FSMContext):
-    await state.clear()
-    records = await operation(lambda bots: bots.repo.list_bots())
-    await answer(
-        message, "Все боты" if records else "Пока нет созданных ботов.", main_keyboard()
-    )
-    for record in records:
-        await answer(message, describe(record), card_keyboard(record))
-
-
-@admin_router.message(Owner(), F.users_shared)
-async def select_recipient(message: Message, state: FSMContext):
+@admin_router.message(StateFilter(AdminFlow.choosing_recipient))
+async def receive_recipient(message: Message, state: FSMContext) -> None:
     shared = message.users_shared
-    if shared.request_id != RECIPIENT_REQUEST_ID:
-        await answer(
-            message,
-            "Этот выбор устарел. Нажми «Выбрать пользователя», чтобы начать заново.",
-            main_keyboard(),
-        )
+    if shared is None or len(shared.users) != 1:
+        await message.answer("Choose one user.")
         return
-    if len(shared.users) != 1 or shared.users[0].user_id <= 0:
-        await answer(message, "Выбери одного пользователя.", cancel_keyboard())
-        return
+
     user = shared.users[0]
-    recipient = {
-        "recipient_id": user.user_id,
-        "recipient_username": user.username or "",
-        "recipient_name": user.first_name or "",
-    }
-    await show_card(message, state, recipient)
-
-
-async def show_card(message, state, recipient):
-    existing, pending = await operation(
-        lambda bots: bots.find_recipient(recipient["recipient_id"])
+    existing_bot = await asyncio.to_thread(
+        managed_bots_repository.get_by_recipient,
+        user.user_id,
     )
-    data = {
-        key: recipient[key]
-        for key in ("recipient_id", "recipient_username", "recipient_name")
-        if key in recipient
-    }
-    await state.set_state(Creation.card)
-    if existing:
-        data["key"] = f"bot:{existing['bot_id']}"
-        text = (
-            "Бот активирован."
-            if existing.get("access_status") == "configured"
-            else "Бот ожидает активации."
-        )
-        actions = ["Добавить лимит"]
-    elif pending:
-        data["key"] = f"pending:{pending['username']}"
-        text = "Заверши создание бота в Telegram."
-        actions = ["Продолжить создание"]
-    else:
-        text = "Бот ещё не создан."
-        actions = ["Создать бота"]
-    await state.set_data(data)
-    record = existing or pending
-    if record:
-        text += f"\nОсталось: {record['remaining_seconds']} секунд."
-    if existing:
-        await answer(message, describe(existing), card_keyboard(existing))
-        return
-    await answer(
-        message,
-        f"Пользователь: {recipient_label(data)}\n{text}",
-        {
-            "keyboard": [[{"text": action}] for action in actions]
-            + [[{"text": "Назад"}]],
-            "resize_keyboard": True,
-        },
-    )
-
-
-@admin_router.message(Owner(), Creation.card, F.text == "Создать бота")
-async def begin_creation(message: Message, state: FSMContext):
-    data = await state.get_data()
-    if data.get("key"):
-        await show_card(message, state, data)
-        return
-    await state.set_state(Creation.seconds)
-    await answer(
-        message,
-        "Как долго? Отправь бюджет в секундах, например 600.",
-        cancel_keyboard(),
-    )
-
-
-@admin_router.message(Owner(), Creation.card, F.text == "Продолжить создание")
-async def continue_creation(message: Message, state: FSMContext):
-    data = await state.get_data()
-    record = await operation(lambda bots: bots.repo.get(data.get("key", "")))
-    if record and data["key"].startswith("pending:"):
-        await send_creation_request(message, record)
-    else:
-        await show_card(message, state, data)
-
-
-@admin_router.message(Owner(), Creation.card, F.text == "Добавить лимит")
-async def begin_limit(message: Message, state: FSMContext):
-    data = await state.get_data()
-    if not data.get("key", "").startswith("bot:"):
-        await show_card(message, state, data)
-        return
-    await state.set_state(Creation.add_limit)
-    await answer(message, "Сколько секунд добавить к лимиту?", cancel_keyboard())
-
-
-@admin_router.message(Owner(), Creation.card, F.text)
-async def card_hint(message: Message, state: FSMContext):
-    await show_card(message, state, await state.get_data())
-
-
-@admin_router.message(Owner(), F.managed_bot_created)
-async def creation_notice(message: Message):
-    # Registration arrives in a separate managed_bot update.
-    pass
-
-
-@admin_router.message(Owner(), Creation.seconds)
-@admin_router.message(Owner(), Creation.add_limit)
-async def budget(message: Message, state: FSMContext):
-    text = (message.text or "").strip()
-    if not text.isascii() or not text.isdecimal() or not 0 < int(text) <= 2**52:
-        await answer(
-            message, "Введи положительное целое число секунд.", cancel_keyboard()
-        )
-        return
-    data = await state.get_data()
-    if await state.get_state() == Creation.add_limit.state:
-        try:
-            record = await operation(
-                lambda bots: bots.add_limit(data["key"], int(text))
-            )
-        except LookupError:
-            await state.clear()
-            await answer(
-                message,
-                "Бот не найден. Нажми «Выбрать пользователя», чтобы начать заново.",
-                main_keyboard(),
-            )
-            return
-        except ValueError:
-            await answer(message, "Итоговый лимит слишком велик.", cancel_keyboard())
-            return
-        await answer(
-            message,
-            f"Добавлено {int(text)} секунд. Новый лимит: {record['remaining_seconds']} секунд.",
-        )
-        await show_card(message, state, data)
-        return
-    existing, pending = await operation(
-        lambda bots: bots.find_recipient(data["recipient_id"])
-    )
-    if existing:
+    if existing_bot and existing_bot.status == ManagedBotStatus.PENDING_CREATION:
         await state.clear()
-        await answer(message, "Для этого пользователя бот уже создан.", main_keyboard())
-        await answer(message, describe(existing), card_keyboard(existing))
+        card = managed_bot_creation_card(existing_bot, secrets.randbelow(2**31))
+        await message.answer(card.text, reply_markup=card.reply_markup)
         return
-    if pending is None:
-        pending = await operation(lambda bots: bots.create_pending(data, int(text)))
-    await state.set_data({**data, "key": f"pending:{pending['username']}"})
-    await state.set_state(Creation.card)
-    await send_creation_request(message, pending)
+    if existing_bot is not None:
+        existing_bot = await recover_card_activation(existing_bot)
+
+    card = user_card(
+        user.user_id,
+        user.username,
+        user.first_name,
+        existing_bot,
+    )
+    if existing_bot is None:
+        await state.update_data(
+            recipient_id=user.user_id,
+            recipient_username=user.username,
+            recipient_name=user.first_name,
+        )
+        await state.set_state(AdminFlow.creating_bot)
+    else:
+        await state.clear()
+    await message.answer(card.text, reply_markup=card.reply_markup)
 
 
-@admin_router.message(Owner())
-async def unsupported_message(message: Message):
-    await answer(message, "Выбери действие с помощью кнопок ниже.", main_keyboard())
+@admin_router.message(StateFilter(AdminFlow.creating_bot), F.text == "Create bot")
+async def begin_creation(message: Message, state: FSMContext) -> None:
+    await state.set_state(AdminFlow.entering_initial_limit)
+    await message.answer(
+        "Send the initial limit in seconds.",
+        reply_markup=back_keyboard(),
+    )
+
+
+@admin_router.message(StateFilter(AdminFlow.entering_initial_limit))
+async def receive_initial_limit(message: Message, state: FSMContext) -> None:
+    seconds = _parse_seconds(message.text)
+    if seconds is None:
+        await message.answer("Send a positive whole number of seconds.")
+        return
+
+    data = await state.get_data()
+    recipient_id = data.get("recipient_id")
+    if not isinstance(recipient_id, int):
+        await state.clear()
+        await message.answer("The user selection expired. Start again.")
+        return
+
+    try:
+        bot = await asyncio.to_thread(
+            managed_bots_repository.create_pending_bot,
+            recipient_id,
+            data.get("recipient_username"),
+            data.get("recipient_name"),
+            seconds,
+        )
+    except ValueError:
+        await state.clear()
+        await message.answer("This user already has a bot. Start again.")
+        return
+
+    await state.clear()
+    card = managed_bot_creation_card(bot, secrets.randbelow(2**31))
+    await message.answer(card.text, reply_markup=card.reply_markup)
+
+
+@admin_router.message(StateFilter(AdminFlow.entering_additional_limit))
+async def receive_additional_limit(message: Message, state: FSMContext) -> None:
+    seconds = _parse_seconds(message.text)
+    if seconds is None:
+        await message.answer("Send a positive whole number of seconds.")
+        return
+
+    data = await state.get_data()
+    bot_id = data.get("bot_id")
+    if not isinstance(bot_id, int):
+        await state.clear()
+        await message.answer("No bot is selected. Start again.")
+        return
+
+    try:
+        bot = await asyncio.to_thread(
+            managed_bots_repository.add_limit,
+            bot_id,
+            seconds,
+        )
+    except LookupError:
+        await state.clear()
+        await message.answer("Bot not found. Start again.")
+        return
+
+    await state.clear()
+    await show_bot_card(message, bot)
 
 
 @admin_router.managed_bot()
-async def register_bot(event: ManagedBotUpdated, bot):
-    owner = get_admin_bot_settings().owner_id
-    if event.user.id != owner:
+async def register_managed_bot(event: ManagedBotUpdated, bot: Bot) -> None:
+    """Bind Telegram's creation result to the saved pending record."""
+    if event.user.id != admin_bot_settings.owner_id:
         return
-    record = await operation(
-        lambda bots: bots.register(event.bot_user.model_dump(exclude_none=True))
-    )
-    if record is None:
+
+    created = event.bot_user
+    try:
+        record = await asyncio.to_thread(
+            managed_bots_repository.register_created_bot,
+            created.id,
+            created.username or "",
+            created.first_name or created.username or "",
+        )
+        if record is not None:
+            record = await asyncio.to_thread(
+                activation_service.prepare_activation,
+                record.id,
+            )
+    except (RuntimeError, ValueError):
         await bot.send_message(
-            owner,
-            f"Получен бот @{event.bot_user.username or ''}, но его параметры не найдены. "
-            "При создании нужно сохранить предложенный @username.",
-            reply_markup=main_keyboard(),
-            parse_mode=None,
+            event.user.id,
+            "The managed bot could not be registered. Please try again.",
         )
         return
+
+    if record is None:
+        await bot.send_message(
+            event.user.id,
+            "This bot does not match a pending creation request.",
+        )
+        return
+
     await bot.send_message(
-        owner, describe(record), reply_markup=card_keyboard(record), parse_mode=None
+        event.user.id,
+        bot_card_text(record),
+        reply_markup=bot_card_keyboard(record),
     )
 
 
-def notify_child_claim(message, child_api, result):
-    sender_id = message.get("from", {}).get("id")
-    if not isinstance(sender_id, int) or sender_id <= 0:
-        return
-    text = {
-        "invalid": "Используй персональную ссылку, которую тебе отправили.",
-        "failed": "Не удалось активировать доступ. Попробуй ещё раз позже.",
-        "blocked": "Активация не завершена. Восстановить доступ для повторного входа не удалось. Обратись к администратору.",
-        "configured": "Готово! Это твой персональный бот.",
-    }[result]
-    child_api.call("sendMessage", chat_id=sender_id, text=text)
+async def recover_card_activation(record):
+    if record.status == ManagedBotStatus.ACTIVE or record.telegram_bot_id is None:
+        return record
+    if (
+        record.status == ManagedBotStatus.AWAITING_ACTIVATION
+        and record.claim_token
+        and record.child_bot_token
+    ):
+        return record
+    return await asyncio.to_thread(activation_service.recover_activation, record.id)
+
+
+@managed_bot_router.message()
+async def process_managed_bot_message(
+    message: Message,
+    managed_bot_id: int,
+    managed_update_id: int,
+) -> dict[str, str]:
+    if message.from_user is None:
+        return {"status": "ignored"}
+
+    result = await asyncio.to_thread(
+        activation_service.handle_claim,
+        telegram_bot_id=managed_bot_id,
+        update_id=managed_update_id,
+        command_text=message.text,
+        claimant_id=message.from_user.id,
+        claimant_username=message.from_user.username,
+        claimant_name=message.from_user.first_name,
+    )
+    texts = {
+        "configured": "Access activated. You can now use your personal bot.",
+        "invalid": "Use the personal activation link that was sent to you.",
+        "failed": "Access could not be activated. Please try the link again later.",
+        "blocked": "Activation could not be completed. Contact the administrator.",
+    }
+    text = texts.get(result.value)
+    if text:
+        await message.answer(text)
+    return {"status": result.value}
+
+
+def _parse_seconds(text: str | None) -> int | None:
+    value = (text or "").strip()
+    if not value.isascii() or not value.isdecimal():
+        return None
+    seconds = int(value)
+    return seconds if seconds > 0 else None

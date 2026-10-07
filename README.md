@@ -118,11 +118,10 @@ consumes it through its SSH tunnel. Give the admin bot a separate Redis broker
 from other bots because they use the same task name and queue.
 
 The admin worker and its persistent SQLite database can also run in their own
-Docker Compose project while using the root gateway and Redis. See
-[`bot_factories/admin_bot/README.md`](bot_factories/admin_bot/README.md) for the
-startup instructions.
-
-Run `./bot_factories/admin_bot/start_worker.sh` for the local worker setup. In
+Docker Compose project while using the root gateway and Redis; use
+`bot_factories/admin_bot/docker-compose.yml` for that setup. For a local run,
+open the configured SSH tunnel to Redis, load the admin `.env`, and start the
+`bot_factories.admin_bot.celery_app` Celery worker. In
 the admin bot's private chat, **Выбрать пользователя** asks you to choose a
 Telegram user and opens their bot card. If no bot exists, press **Создать бота**
 and enter its initial limit in seconds.
