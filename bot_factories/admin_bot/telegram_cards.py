@@ -170,7 +170,7 @@ def invitation_text(bot: ManagedBotRow, link: str) -> str:
             f"Get your bot: {link}"
         )
     return (
-        f'You have been assigned the bot “{bot.name or bot.username}”.\n'
+        f"You have been assigned the bot “{bot.name or bot.username}”.\n"
         f"Remaining limit: {bot.remaining_seconds} seconds.\n"
         f"{link}"
     )
@@ -183,7 +183,8 @@ def invitation_button(bot: ManagedBotRow) -> InlineKeyboardButton:
         username = bot.recipient_username.lstrip("@")
         return InlineKeyboardButton(
             text="Send to recipient",
-            url=f"https://t.me/{username}?" + urlencode({"text": text}, quote_via=quote),
+            url=f"https://t.me/{username}?"
+            + urlencode({"text": text}, quote_via=quote),
         )
     return InlineKeyboardButton(
         text="Share link",

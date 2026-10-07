@@ -27,3 +27,4 @@ ruff = "^0.14.10"
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
+pythonpath = ["."]

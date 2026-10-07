@@ -149,3 +149,51 @@ def test_invalid_claim_does_not_consume_token():
         == ActivationResult.INVALID
     )
     assert repo.bot.claim_token == "secret"
+
+
+def test_prepare_failure_keeps_recovery_state_and_redacts_credentials():
+    repo = Repository(bot(telegram_bot_id=99))
+    api = TelegramApi(error="request failed for claim_secret and 123456:token")
+    service = ManagedBotActivationService(repo, api)
+
+    prepared = service.prepare_activation(1)
+
+    assert prepared.status == ManagedBotStatus.ERROR
+    assert prepared.claim_token
+    assert prepared.child_bot_token == "child-token"
+    assert "claim_secret" not in prepared.activation_error
+    assert "123456:token" not in prepared.activation_error
+    assert "[redacted]" in prepared.activation_error
+
+
+def test_active_bot_is_not_reconfigured_during_recovery():
+    repo = Repository(bot(status=ManagedBotStatus.ACTIVE))
+    api = TelegramApi()
+    service = ManagedBotActivationService(repo, api)
+
+    recovered = service.recover_activation(1)
+
+    assert recovered == repo.bot
+    assert api.calls == []
+
+
+def test_duplicate_claim_update_does_not_change_activation():
+    original = bot(
+        child_bot_token="child",
+        claim_token="secret",
+        claim_webhook_update_id=10,
+    )
+    repo = Repository(original)
+    service = ManagedBotActivationService(repo, TelegramApi())
+
+    result = service.handle_claim(
+        telegram_bot_id=99,
+        update_id=10,
+        command_text="/start claim_secret",
+        claimant_id=42,
+        claimant_username="holder",
+        claimant_name="Holder",
+    )
+
+    assert result == ActivationResult.DUPLICATE
+    assert repo.bot == original
