@@ -81,6 +81,34 @@ async def show_main_menu(message: Message, state: FSMContext) -> None:
 
 @admin_router.message(F.text == "Back")
 async def back_to_menu(message: Message, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    data = await state.get_data()
+
+    if current_state == AdminFlow.entering_initial_limit.state:
+        recipient_id = data.get("recipient_id")
+        if isinstance(recipient_id, int):
+            await state.set_state(AdminFlow.creating_bot)
+            card = user_card(
+                recipient_id,
+                data.get("recipient_username"),
+                data.get("recipient_name"),
+                None,
+            )
+            await message.answer(card.text, reply_markup=card.reply_markup)
+            return
+
+    if current_state == AdminFlow.entering_additional_limit.state:
+        bot_id = data.get("bot_id")
+        if isinstance(bot_id, int):
+            managed_bot = await asyncio.to_thread(
+                managed_bots_repository.get_bot,
+                bot_id,
+            )
+            if managed_bot is not None:
+                await state.clear()
+                await show_bot_card(message, managed_bot)
+                return
+
     await show_main_menu(message, state)
 
 
