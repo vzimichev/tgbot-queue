@@ -198,16 +198,3 @@ class ManagedBotsCrud:
             (seconds, bot_id),
         )
         return self._get_by_id(bot_id)
-
-    def deduct_seconds_if_available(self, bot_id: int, seconds: int) -> bool:
-        cursor = self.connection.execute(
-            """
-            UPDATE managed_bots
-            SET remaining_seconds = remaining_seconds - ?
-            WHERE id = ?
-              AND status = 'active'
-              AND remaining_seconds >= ?
-            """,
-            (seconds, bot_id, seconds),
-        )
-        return cursor.rowcount == 1

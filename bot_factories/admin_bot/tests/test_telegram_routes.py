@@ -5,7 +5,9 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from bot_factories.admin_bot import telegram_routes as routes
-from bot_factories.admin_bot.db.managed_bot_video_usage import VideoLimitConsumption
+from bot_factories.admin_bot.db.managed_bot_limit_transactions import (
+    VideoLimitConsumption,
+)
 from bot_factories.admin_bot.db.managed_bots import ActivationResult, ManagedBotStatus
 
 

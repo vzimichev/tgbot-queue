@@ -7,7 +7,6 @@ from bot_factories.admin_bot.db.managed_bots import (
     ManagedBotStatus,
     ManagedBotsCrud,
 )
-from bot_factories.admin_bot.db.managed_bot_video_usage import VideoLimitConsumption
 
 
 @pytest.fixture

@@ -3,7 +3,9 @@ from dataclasses import replace
 import pytest
 
 from bot_factories.admin_bot.db import db_engine
-from bot_factories.admin_bot.db.managed_bot_video_usage import VideoLimitConsumption
+from bot_factories.admin_bot.db.managed_bot_limit_transactions import (
+    VideoLimitConsumption,
+)
 from bot_factories.admin_bot.db.managed_bots import ManagedBotStatus
 from bot_factories.admin_bot.repositories.managed_bots import ManagedBotsRepository
 

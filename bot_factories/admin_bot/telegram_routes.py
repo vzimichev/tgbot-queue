@@ -19,7 +19,9 @@ from bot_factories.admin_bot.telegram_cards import (
     show_bot_card,
     user_card,
 )
-from bot_factories.admin_bot.db.managed_bot_video_usage import VideoLimitConsumption
+from bot_factories.admin_bot.db.managed_bot_limit_transactions import (
+    VideoLimitConsumption,
+)
 from bot_factories.admin_bot.db.managed_bots import ManagedBotStatus
 from bot_factories.admin_bot.repositories.bot_activation import (
     ManagedBotActivationService,

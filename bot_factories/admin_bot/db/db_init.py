@@ -46,11 +46,42 @@ def initialize(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         """
-        CREATE TABLE IF NOT EXISTS managed_bot_video_usage (
+        CREATE TABLE IF NOT EXISTS managed_bot_limit_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             managed_bot_id INTEGER NOT NULL REFERENCES managed_bots(id),
-            webhook_update_id INTEGER NOT NULL,
-            seconds INTEGER NOT NULL CHECK (seconds >= 0),
-            PRIMARY KEY (managed_bot_id, webhook_update_id)
+            seconds INTEGER NOT NULL,
+            transaction_type TEXT NOT NULL CHECK (
+                transaction_type IN ('opening_balance', 'top_up', 'video_debit')
+            ),
+            webhook_update_id INTEGER
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS managed_bot_limit_transactions_video_update_idx
+        ON managed_bot_limit_transactions(managed_bot_id, webhook_update_id)
+        WHERE webhook_update_id IS NOT NULL
+        """
+    )
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS managed_bot_limit_transactions_opening_idx
+        ON managed_bot_limit_transactions(managed_bot_id)
+        WHERE transaction_type = 'opening_balance'
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO managed_bot_limit_transactions (
+            managed_bot_id, seconds, transaction_type
+        )
+        SELECT id, remaining_seconds, 'opening_balance'
+        FROM managed_bots
+        WHERE NOT EXISTS (
+            SELECT 1 FROM managed_bot_limit_transactions
+            WHERE managed_bot_id = managed_bots.id
+              AND transaction_type = 'opening_balance'
         )
         """
     )
