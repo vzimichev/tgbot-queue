@@ -3,18 +3,17 @@ import sqlite3
 from dataclasses import replace
 
 from bot_factories.admin_bot.db.db_engine import transaction, transactional
-from bot_factories.admin_bot.db.managed_bot_limit_transactions import (
-    LimitTransactionType,
-    ManagedBotLimitTransactionsCrud,
-    VideoLimitConsumption,
-)
 from bot_factories.admin_bot.db.managed_bots import (
     ManagedBotRow,
     ManagedBotStatus,
     ManagedBotsCrud,
 )
+from bot_factories.admin_bot.repositories.managed_bot_limits import (
+    ManagedBotLimitsRepository,
+)
 
 SUGGESTED_BOT_NAME = "My faceswap bot"
+managed_bot_limits = ManagedBotLimitsRepository()
 
 
 class ManagedBotsRepository:
@@ -25,7 +24,7 @@ class ManagedBotsRepository:
         *,
         connection: sqlite3.Connection,
     ) -> ManagedBotRow | None:
-        return self._with_balance(
+        return managed_bot_limits.with_balance(
             ManagedBotsCrud(connection).get_by_recipient_id(recipient_id), connection
         )
 
@@ -36,7 +35,7 @@ class ManagedBotsRepository:
         *,
         connection: sqlite3.Connection,
     ) -> ManagedBotRow | None:
-        return self._with_balance(
+        return managed_bot_limits.with_balance(
             ManagedBotsCrud(connection).get_by_telegram_bot_id(telegram_bot_id), connection
         )
 
@@ -47,7 +46,7 @@ class ManagedBotsRepository:
         *,
         connection: sqlite3.Connection,
     ) -> ManagedBotRow | None:
-        return self._with_balance(ManagedBotsCrud(connection).get_by_id(bot_id), connection)
+        return managed_bot_limits.with_balance(ManagedBotsCrud(connection).get_by_id(bot_id), connection)
 
     @transactional
     def list_bots(
@@ -56,7 +55,7 @@ class ManagedBotsRepository:
         connection: sqlite3.Connection,
     ) -> list[ManagedBotRow]:
         return [
-            self._with_balance(bot, connection)
+            managed_bot_limits.with_balance(bot, connection)
             for bot in ManagedBotsCrud(connection).list_all()
         ]
 
@@ -95,12 +94,8 @@ class ManagedBotsRepository:
                         status=ManagedBotStatus.PENDING_CREATION,
                     )
                 )
-                ManagedBotLimitTransactionsCrud(connection).add(
-                    bot.id,
-                    initial_seconds,
-                    LimitTransactionType.OPENING_BALANCE,
-                )
-                return self._with_balance(bot, connection)
+                managed_bot_limits.create_opening_balance(bot.id, initial_seconds, connection)
+                return managed_bot_limits.with_balance(bot, connection)
 
         raise RuntimeError("Could not generate a unique bot username")
 
@@ -136,7 +131,7 @@ class ManagedBotsRepository:
         )
         with transaction() as connection:
             saved = ManagedBotsCrud(connection).update(registered_bot)
-            return self._with_balance(saved, connection)
+            return managed_bot_limits.with_balance(saved, connection)
 
     @transactional
     def save(
@@ -152,73 +147,10 @@ class ManagedBotsRepository:
         # The legacy column is no longer a balance cache.  Preserve it while
         # saving lifecycle fields, because the transaction ledger is canonical.
         saved = crud.update(replace(bot, remaining_seconds=persisted.remaining_seconds))
-        return self._with_balance(saved, connection)
-
-    @transactional
-    def add_limit(
-        self,
-        bot_id: int,
-        seconds: int,
-        *,
-        connection: sqlite3.Connection,
-    ) -> ManagedBotRow:
-        if seconds <= 0:
-            raise ValueError("seconds must be positive")
-        crud = ManagedBotsCrud(connection)
-        bot = crud.get_by_id(bot_id)
-        if bot is None:
-            raise LookupError(f"Managed bot {bot_id} was not found")
-        ManagedBotLimitTransactionsCrud(connection).add(
-            bot_id,
-            seconds,
-            LimitTransactionType.TOP_UP,
-        )
-        return self._with_balance(bot, connection)
-
-    @transactional
-    def consume_video_limit(
-        self,
-        bot_id: int,
-        update_id: int,
-        seconds: int,
-        *,
-        connection: sqlite3.Connection,
-    ) -> tuple[VideoLimitConsumption, ManagedBotRow | None]:
-        if update_id < 0:
-            raise ValueError("update_id must not be negative")
-        if seconds < 0:
-            raise ValueError("seconds must not be negative")
-
-        connection.execute("BEGIN IMMEDIATE")
-        bots = ManagedBotsCrud(connection)
-        transactions = ManagedBotLimitTransactionsCrud(connection)
-        bot = bots.get_by_id(bot_id)
-        if bot is None or bot.status != ManagedBotStatus.ACTIVE:
-            return VideoLimitConsumption.INACTIVE, bot
-        if transactions.has_video_debit(bot_id, update_id):
-            return VideoLimitConsumption.DUPLICATE, self._with_balance(bot, connection)
-        if transactions.balance(bot_id) < seconds:
-            return VideoLimitConsumption.INSUFFICIENT, self._with_balance(bot, connection)
-
-        transactions.add(
-            bot_id,
-            -seconds,
-            LimitTransactionType.VIDEO_DEBIT,
-            webhook_update_id=update_id,
-        )
-        return VideoLimitConsumption.CONSUMED, self._with_balance(bot, connection)
+        return managed_bot_limits.with_balance(saved, connection)
 
     def get_invitation(self, bot_id: int) -> str:
         bot = self.get_bot(bot_id)
         if bot is None:
             raise LookupError(f"Managed bot {bot_id} was not found")
         return f"https://t.me/{bot.username}"
-
-    @staticmethod
-    def _with_balance(
-        bot: ManagedBotRow | None, connection: sqlite3.Connection
-    ) -> ManagedBotRow | None:
-        if bot is None:
-            return None
-        balance = ManagedBotLimitTransactionsCrud(connection).balance(bot.id)
-        return replace(bot, remaining_seconds=balance)

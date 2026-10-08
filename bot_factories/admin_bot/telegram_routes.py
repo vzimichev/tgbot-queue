@@ -28,9 +28,13 @@ from bot_factories.admin_bot.repositories.bot_activation import (
 )
 from bot_factories.admin_bot.telegram_api import ManagedBotTelegramApi
 from bot_factories.admin_bot.repositories.managed_bots import ManagedBotsRepository
+from bot_factories.admin_bot.repositories.managed_bot_limits import (
+    ManagedBotLimitsRepository,
+)
 
 
 managed_bots_repository = ManagedBotsRepository()
+managed_bot_limits_repository = ManagedBotLimitsRepository()
 activation_service = ManagedBotActivationService(
     managed_bots_repository,
     ManagedBotTelegramApi(),
@@ -179,7 +183,7 @@ async def handle_limit(query: CallbackQuery, state: FSMContext) -> None:
 
     try:
         bot = await asyncio.to_thread(
-            managed_bots_repository.add_limit,
+            managed_bot_limits_repository.add_limit,
             bot_id,
             seconds_to_add,
         )
@@ -286,7 +290,7 @@ async def receive_additional_limit(message: Message, state: FSMContext) -> None:
 
     try:
         bot = await asyncio.to_thread(
-            managed_bots_repository.add_limit,
+            managed_bot_limits_repository.add_limit,
             bot_id,
             seconds,
         )
@@ -374,7 +378,7 @@ async def process_managed_bot_message(
             return {"status": "not_video"}
 
         result, updated_bot = await asyncio.to_thread(
-            managed_bots_repository.consume_video_limit,
+            managed_bot_limits_repository.consume_video_limit,
             managed_bot.id,
             managed_update_id,
             message.video.duration,

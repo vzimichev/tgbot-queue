@@ -77,7 +77,7 @@ def test_active_managed_bot_charges_the_sent_video(monkeypatch, managed_bot):
     bot = managed_bot(status=ManagedBotStatus.ACTIVE, remaining_seconds=48)
     monkeypatch.setattr(routes.managed_bots_repository, "get_by_telegram_bot_id", Mock(return_value=bot))
     consume = Mock(return_value=(VideoLimitConsumption.CONSUMED, bot))
-    monkeypatch.setattr(routes.managed_bots_repository, "consume_video_limit", consume)
+    monkeypatch.setattr(routes.managed_bot_limits_repository, "consume_video_limit", consume)
 
     assert asyncio.run(routes.process_managed_bot_message(message, 99, 12)) == {"status": "consumed"}
     consume.assert_called_once_with(bot.id, 12, 12)
