@@ -27,20 +27,13 @@ from bot_factories.admin_bot.repositories.bot_activation import (
 from bot_factories.admin_bot.telegram_api import ManagedBotTelegramApi
 from bot_factories.admin_bot.repositories.managed_bots import ManagedBotsRepository
 from bot_factories.admin_bot.repositories.managed_bot_limits import (
-    ManagedBotLimitsRepository,
-)
-from bot_factories.admin_bot.repositories.managed_bot_video_limits import (
     ManagedBotVideoLimitResult,
-    ManagedBotVideoLimitsRepository,
+    ManagedBotLimitsRepository,
 )
 
 
 managed_bots_repository = ManagedBotsRepository()
 managed_bot_limits_repository = ManagedBotLimitsRepository()
-managed_bot_video_limits_repository = ManagedBotVideoLimitsRepository(
-    managed_bots_repository,
-    managed_bot_limits_repository,
-)
 activation_service = ManagedBotActivationService(
     managed_bots_repository,
     ManagedBotTelegramApi(),
@@ -381,7 +374,7 @@ async def process_managed_bot_message(
 
     if getattr(message, "video", None) is not None:
         charge = await asyncio.to_thread(
-            managed_bot_video_limits_repository.charge_video,
+            managed_bot_limits_repository.charge_video,
             managed_bot_id,
             message.from_user.id,
             managed_update_id,

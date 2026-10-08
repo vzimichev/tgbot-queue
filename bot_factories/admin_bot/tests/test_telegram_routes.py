@@ -6,7 +6,7 @@ import pytest
 
 from bot_factories.admin_bot import telegram_routes as routes
 from bot_factories.admin_bot.db.managed_bots import ActivationResult, ManagedBotStatus
-from bot_factories.admin_bot.repositories.managed_bot_video_limits import (
+from bot_factories.admin_bot.repositories.managed_bot_limits import (
     ManagedBotVideoLimitCharge,
     ManagedBotVideoLimitResult,
 )
@@ -83,7 +83,7 @@ def test_active_managed_bot_charges_the_sent_video(monkeypatch, managed_bot):
         )
     )
     monkeypatch.setattr(
-        routes.managed_bot_video_limits_repository, "charge_video", charge_video
+        routes.managed_bot_limits_repository, "charge_video", charge_video
     )
 
     assert asyncio.run(routes.process_managed_bot_message(message, 99, 12)) == {"status": "consumed"}
