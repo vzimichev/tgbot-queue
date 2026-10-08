@@ -53,10 +53,28 @@ def initialize(connection: sqlite3.Connection) -> None:
             transaction_type TEXT NOT NULL CHECK (
                 transaction_type IN ('opening_balance', 'top_up', 'video_debit')
             ),
-            webhook_update_id INTEGER
+            webhook_update_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
+    transaction_columns = {
+        row[1]
+        for row in connection.execute(
+            "PRAGMA table_info(managed_bot_limit_transactions)"
+        )
+    }
+    if "created_at" not in transaction_columns:
+        connection.execute(
+            "ALTER TABLE managed_bot_limit_transactions ADD COLUMN created_at TEXT"
+        )
+        connection.execute(
+            """
+            UPDATE managed_bot_limit_transactions
+            SET created_at = CURRENT_TIMESTAMP
+            WHERE created_at IS NULL
+            """
+        )
     connection.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS managed_bot_limit_transactions_video_update_idx
