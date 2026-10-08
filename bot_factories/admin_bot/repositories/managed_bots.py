@@ -3,17 +3,16 @@ import sqlite3
 from dataclasses import replace
 
 from bot_factories.admin_bot.db.db_engine import transaction, transactional
+from bot_factories.admin_bot.db.managed_bot_limit_transactions import (
+    ManagedBotLimitTransactionsCrud,
+)
 from bot_factories.admin_bot.db.managed_bots import (
     ManagedBotRow,
     ManagedBotStatus,
     ManagedBotsCrud,
 )
-from bot_factories.admin_bot.repositories.managed_bot_limits import (
-    ManagedBotLimitsRepository,
-)
 
 SUGGESTED_BOT_NAME = "My faceswap bot"
-managed_bot_limits = ManagedBotLimitsRepository()
 
 
 class ManagedBotsRepository:
@@ -24,7 +23,7 @@ class ManagedBotsRepository:
         *,
         connection: sqlite3.Connection,
     ) -> ManagedBotRow | None:
-        return managed_bot_limits.with_balance(
+        return self._with_balance(
             ManagedBotsCrud(connection).get_by_recipient_id(recipient_id), connection
         )
 
@@ -35,7 +34,7 @@ class ManagedBotsRepository:
         *,
         connection: sqlite3.Connection,
     ) -> ManagedBotRow | None:
-        return managed_bot_limits.with_balance(
+        return self._with_balance(
             ManagedBotsCrud(connection).get_by_telegram_bot_id(telegram_bot_id), connection
         )
 
@@ -46,7 +45,7 @@ class ManagedBotsRepository:
         *,
         connection: sqlite3.Connection,
     ) -> ManagedBotRow | None:
-        return managed_bot_limits.with_balance(ManagedBotsCrud(connection).get_by_id(bot_id), connection)
+        return self._with_balance(ManagedBotsCrud(connection).get_by_id(bot_id), connection)
 
     @transactional
     def list_bots(
@@ -55,7 +54,7 @@ class ManagedBotsRepository:
         connection: sqlite3.Connection,
     ) -> list[ManagedBotRow]:
         return [
-            managed_bot_limits.with_balance(bot, connection)
+            self._with_balance(bot, connection)
             for bot in ManagedBotsCrud(connection).list_all()
         ]
 
@@ -94,8 +93,10 @@ class ManagedBotsRepository:
                         status=ManagedBotStatus.PENDING_CREATION,
                     )
                 )
-                managed_bot_limits.create_opening_balance(bot.id, initial_seconds, connection)
-                return managed_bot_limits.with_balance(bot, connection)
+                ManagedBotLimitTransactionsCrud(connection).add(
+                    bot.id, initial_seconds, "opening_balance"
+                )
+                return self._with_balance(bot, connection)
 
         raise RuntimeError("Could not generate a unique bot username")
 
@@ -131,7 +132,7 @@ class ManagedBotsRepository:
         )
         with transaction() as connection:
             saved = ManagedBotsCrud(connection).update(registered_bot)
-            return managed_bot_limits.with_balance(saved, connection)
+            return self._with_balance(saved, connection)
 
     @transactional
     def save(
@@ -147,10 +148,21 @@ class ManagedBotsRepository:
         # The legacy column is no longer a balance cache.  Preserve it while
         # saving lifecycle fields, because the transaction ledger is canonical.
         saved = crud.update(replace(bot, remaining_seconds=persisted.remaining_seconds))
-        return managed_bot_limits.with_balance(saved, connection)
+        return self._with_balance(saved, connection)
 
     def get_invitation(self, bot_id: int) -> str:
         bot = self.get_bot(bot_id)
         if bot is None:
             raise LookupError(f"Managed bot {bot_id} was not found")
         return f"https://t.me/{bot.username}"
+
+    @staticmethod
+    def _with_balance(
+        bot: ManagedBotRow | None, connection: sqlite3.Connection
+    ) -> ManagedBotRow | None:
+        if bot is None:
+            return None
+        return replace(
+            bot,
+            remaining_seconds=ManagedBotLimitTransactionsCrud(connection).balance(bot.id),
+        )

@@ -1,5 +1,6 @@
 import asyncio
 import secrets
+from dataclasses import replace
 
 from aiogram import F, Router
 from aiogram.client.bot import Bot
@@ -182,7 +183,7 @@ async def handle_limit(query: CallbackQuery, state: FSMContext) -> None:
         return
 
     try:
-        bot = await asyncio.to_thread(
+        balance = await asyncio.to_thread(
             managed_bot_limits_repository.add_limit,
             bot_id,
             seconds_to_add,
@@ -191,8 +192,12 @@ async def handle_limit(query: CallbackQuery, state: FSMContext) -> None:
         await query.answer("Bot not found.")
         return
 
+    bot = await asyncio.to_thread(managed_bots_repository.get_bot, bot_id)
+    if bot is None:
+        await query.answer("Bot not found.")
+        return
     await query.answer()
-    await show_bot_card(query.message, bot)
+    await show_bot_card(query.message, replace(bot, remaining_seconds=balance))
 
 
 @admin_router.message(StateFilter(AdminFlow.choosing_recipient))
@@ -289,7 +294,7 @@ async def receive_additional_limit(message: Message, state: FSMContext) -> None:
         return
 
     try:
-        bot = await asyncio.to_thread(
+        balance = await asyncio.to_thread(
             managed_bot_limits_repository.add_limit,
             bot_id,
             seconds,
@@ -299,8 +304,13 @@ async def receive_additional_limit(message: Message, state: FSMContext) -> None:
         await message.answer("Bot not found. Start again.")
         return
 
+    bot = await asyncio.to_thread(managed_bots_repository.get_bot, bot_id)
+    if bot is None:
+        await state.clear()
+        await message.answer("Bot not found. Start again.")
+        return
     await state.clear()
-    await show_bot_card(message, bot)
+    await show_bot_card(message, replace(bot, remaining_seconds=balance))
 
 
 @admin_router.managed_bot()
@@ -377,23 +387,21 @@ async def process_managed_bot_message(
             await message.answer("Send a video to use your remaining video-time limit.")
             return {"status": "not_video"}
 
-        result, updated_bot = await asyncio.to_thread(
+        result, balance = await asyncio.to_thread(
             managed_bot_limits_repository.consume_video_limit,
             managed_bot.id,
             managed_update_id,
             message.video.duration,
         )
         if result == VideoLimitConsumption.CONSUMED:
-            assert updated_bot is not None
             await message.answer(
                 f"Video accepted: {message.video.duration} seconds charged. "
-                f"Remaining limit: {updated_bot.remaining_seconds} seconds."
+                f"Remaining limit: {balance} seconds."
             )
         elif result == VideoLimitConsumption.INSUFFICIENT:
-            assert updated_bot is not None
             await message.answer(
                 f"This video is {message.video.duration} seconds, but only "
-                f"{updated_bot.remaining_seconds} seconds remain. "
+                f"{balance} seconds remain. "
                 "Ask the administrator to add more time."
             )
         return {"status": result.value}

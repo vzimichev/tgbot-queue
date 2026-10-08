@@ -51,7 +51,7 @@ def test_register_rejects_changed_username_and_adds_limit(repository):
 
     assert repository.register_created_bot(99, "different_bot", "Bot") is None
     registered = repository.register_created_bot(99, pending.username, "Bot")
-    assert ManagedBotLimitsRepository().add_limit(registered.id, 10).remaining_seconds == 15
+    assert ManagedBotLimitsRepository().add_limit(registered.id, 10) == 15
     assert repository.get_invitation(registered.id) == f"https://t.me/{pending.username}"
 
 
@@ -64,15 +64,12 @@ def test_consuming_video_limit_is_idempotent_and_never_overspends(repository):
     limits = ManagedBotLimitsRepository()
     result, charged = limits.consume_video_limit(active.id, 101, 6)
     assert result == VideoLimitConsumption.CONSUMED
-    assert charged is not None
-    assert charged.remaining_seconds == 4
+    assert charged == 4
 
     duplicate, unchanged = limits.consume_video_limit(active.id, 101, 6)
     assert duplicate == VideoLimitConsumption.DUPLICATE
-    assert unchanged is not None
-    assert unchanged.remaining_seconds == 4
+    assert unchanged == 4
 
     insufficient, unchanged = limits.consume_video_limit(active.id, 102, 6)
     assert insufficient == VideoLimitConsumption.INSUFFICIENT
-    assert unchanged is not None
-    assert unchanged.remaining_seconds == 4
+    assert unchanged == 4
