@@ -27,12 +27,13 @@ class Repository:
 
 
 class TelegramApi:
-    def __init__(self, settings=None, error=None):
+    def __init__(self, settings=None, error=None, restrict_error=None):
         self.settings = settings or {
             "is_access_restricted": True,
             "added_users": [{"id": 42}],
         }
         self.error = error
+        self.restrict_error = restrict_error
         self.calls = []
 
     def get_managed_bot_token(self, _):
@@ -48,6 +49,8 @@ class TelegramApi:
 
     def restrict_access(self, *_):
         self.calls.append("restrict")
+        if self.restrict_error:
+            raise RuntimeError(self.restrict_error)
 
     def get_access_settings(self, _):
         return self.settings
@@ -131,6 +134,29 @@ def test_unverified_telegram_access_uses_application_guard():
     assert repo.bot.access_mode == ManagedBotAccessMode.APPLICATION
     assert service.is_recipient_allowed(repo.bot, 42)
     assert not service.is_recipient_allowed(repo.bot, 7)
+
+
+def test_rejected_access_restriction_uses_application_guard():
+    repo = Repository(bot(child_bot_token="child", claim_token="secret"))
+    api = TelegramApi(
+        {"is_access_restricted": False, "added_users": []},
+        restrict_error="Telegram cannot add this user",
+    )
+    service = ManagedBotActivationService(repo, api)
+
+    result = service.handle_claim(
+        telegram_bot_id=99,
+        update_id=10,
+        command_text="/start claim_secret",
+        claimant_id=42,
+        claimant_username=None,
+        claimant_name="Holder",
+    )
+
+    assert result == ActivationResult.CONFIGURED
+    assert api.calls == ["restrict", "open"]
+    assert repo.bot.access_mode == ManagedBotAccessMode.APPLICATION
+    assert service.is_recipient_allowed(repo.bot, 42)
 
 
 def test_invalid_claim_does_not_consume_token():
