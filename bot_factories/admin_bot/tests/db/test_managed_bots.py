@@ -7,6 +7,7 @@ from bot_factories.admin_bot.db.managed_bots import (
     ManagedBotStatus,
     ManagedBotsCrud,
 )
+from bot_factories.admin_bot.db.managed_bot_video_usage import VideoLimitConsumption
 
 
 @pytest.fixture
@@ -44,6 +45,8 @@ def test_update_and_add_seconds_keep_persisted_values(crud, managed_bot):
         crud.add_seconds(saved.id, 0)
     with pytest.raises(LookupError):
         crud.update(managed_bot(id=999))
+
+
 
 
 def test_initialize_upgrades_legacy_table_with_activation_columns():

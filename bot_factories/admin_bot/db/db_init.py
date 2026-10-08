@@ -44,4 +44,14 @@ def initialize(connection: sqlite3.Connection) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS managed_bots_claim_token_idx "
         "ON managed_bots(claim_token) WHERE claim_token IS NOT NULL"
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS managed_bot_video_usage (
+            managed_bot_id INTEGER NOT NULL REFERENCES managed_bots(id),
+            webhook_update_id INTEGER NOT NULL,
+            seconds INTEGER NOT NULL CHECK (seconds >= 0),
+            PRIMARY KEY (managed_bot_id, webhook_update_id)
+        )
+        """
+    )
     connection.commit()

@@ -3,6 +3,10 @@ import sqlite3
 from dataclasses import replace
 
 from bot_factories.admin_bot.db.db_engine import transaction, transactional
+from bot_factories.admin_bot.db.managed_bot_video_usage import (
+    ManagedBotVideoUsageCrud,
+    VideoLimitConsumption,
+)
 from bot_factories.admin_bot.db.managed_bots import (
     ManagedBotRow,
     ManagedBotStatus,
@@ -142,6 +146,33 @@ class ManagedBotsRepository:
         if bot is None:
             raise LookupError(f"Managed bot {bot_id} was not found")
         return bot
+
+    @transactional
+    def consume_video_limit(
+        self,
+        bot_id: int,
+        update_id: int,
+        seconds: int,
+        *,
+        connection: sqlite3.Connection,
+    ) -> tuple[VideoLimitConsumption, ManagedBotRow | None]:
+        if update_id < 0:
+            raise ValueError("update_id must not be negative")
+        if seconds < 0:
+            raise ValueError("seconds must not be negative")
+
+        bots = ManagedBotsCrud(connection)
+        usage = ManagedBotVideoUsageCrud(connection)
+        bot = bots.get_by_id(bot_id)
+        if bot is None or bot.status != ManagedBotStatus.ACTIVE:
+            return VideoLimitConsumption.INACTIVE, bot
+        if usage.exists(bot_id, update_id):
+            return VideoLimitConsumption.DUPLICATE, bot
+        if not bots.deduct_seconds_if_available(bot_id, seconds):
+            return VideoLimitConsumption.INSUFFICIENT, bots.get_by_id(bot_id)
+
+        usage.create(bot_id, update_id, seconds)
+        return VideoLimitConsumption.CONSUMED, bots.get_by_id(bot_id)
 
     def get_invitation(self, bot_id: int) -> str:
         bot = self.get_bot(bot_id)

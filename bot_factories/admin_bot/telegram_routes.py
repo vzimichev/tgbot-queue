@@ -19,6 +19,7 @@ from bot_factories.admin_bot.telegram_cards import (
     show_bot_card,
     user_card,
 )
+from bot_factories.admin_bot.db.managed_bot_video_usage import VideoLimitConsumption
 from bot_factories.admin_bot.db.managed_bots import ManagedBotStatus
 from bot_factories.admin_bot.repositories.bot_activation import (
     ManagedBotActivationService,
@@ -356,6 +357,40 @@ async def process_managed_bot_message(
 ) -> dict[str, str]:
     if message.from_user is None:
         return {"status": "ignored"}
+
+    managed_bot = await asyncio.to_thread(
+        managed_bots_repository.get_by_telegram_bot_id,
+        managed_bot_id,
+    )
+    if managed_bot is not None and managed_bot.status == ManagedBotStatus.ACTIVE:
+        if not activation_service.is_recipient_allowed(managed_bot, message.from_user.id):
+            await message.answer("This personal bot is available only to its recipient.")
+            return {"status": "forbidden"}
+
+        if message.video is None:
+            await message.answer("Send a video to use your remaining video-time limit.")
+            return {"status": "not_video"}
+
+        result, updated_bot = await asyncio.to_thread(
+            managed_bots_repository.consume_video_limit,
+            managed_bot.id,
+            managed_update_id,
+            message.video.duration,
+        )
+        if result == VideoLimitConsumption.CONSUMED:
+            assert updated_bot is not None
+            await message.answer(
+                f"Video accepted: {message.video.duration} seconds charged. "
+                f"Remaining limit: {updated_bot.remaining_seconds} seconds."
+            )
+        elif result == VideoLimitConsumption.INSUFFICIENT:
+            assert updated_bot is not None
+            await message.answer(
+                f"This video is {message.video.duration} seconds, but only "
+                f"{updated_bot.remaining_seconds} seconds remain. "
+                "Ask the administrator to add more time."
+            )
+        return {"status": result.value}
 
     result = await asyncio.to_thread(
         activation_service.handle_claim,
