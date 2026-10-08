@@ -20,9 +20,6 @@ from bot_factories.admin_bot.telegram_cards import (
     show_bot_card,
     user_card,
 )
-from bot_factories.admin_bot.db.managed_bot_limit_transactions import (
-    VideoLimitConsumption,
-)
 from bot_factories.admin_bot.db.managed_bots import ManagedBotStatus
 from bot_factories.admin_bot.repositories.bot_activation import (
     ManagedBotActivationService,
@@ -32,10 +29,18 @@ from bot_factories.admin_bot.repositories.managed_bots import ManagedBotsReposit
 from bot_factories.admin_bot.repositories.managed_bot_limits import (
     ManagedBotLimitsRepository,
 )
+from bot_factories.admin_bot.repositories.managed_bot_video_limits import (
+    ManagedBotVideoLimitResult,
+    ManagedBotVideoLimitsRepository,
+)
 
 
 managed_bots_repository = ManagedBotsRepository()
 managed_bot_limits_repository = ManagedBotLimitsRepository()
+managed_bot_video_limits_repository = ManagedBotVideoLimitsRepository(
+    managed_bots_repository,
+    managed_bot_limits_repository,
+)
 activation_service = ManagedBotActivationService(
     managed_bots_repository,
     ManagedBotTelegramApi(),
@@ -374,37 +379,28 @@ async def process_managed_bot_message(
     if message.from_user is None:
         return {"status": "ignored"}
 
-    managed_bot = await asyncio.to_thread(
-        managed_bots_repository.get_by_telegram_bot_id,
-        managed_bot_id,
-    )
-    if managed_bot is not None and managed_bot.status == ManagedBotStatus.ACTIVE:
-        if not activation_service.is_recipient_allowed(managed_bot, message.from_user.id):
-            await message.answer("This personal bot is available only to its recipient.")
-            return {"status": "forbidden"}
-
-        if message.video is None:
-            await message.answer("Send a video to use your remaining video-time limit.")
-            return {"status": "not_video"}
-
-        result, balance = await asyncio.to_thread(
-            managed_bot_limits_repository.consume_video_limit,
-            managed_bot.id,
+    if getattr(message, "video", None) is not None:
+        charge = await asyncio.to_thread(
+            managed_bot_video_limits_repository.charge_video,
+            managed_bot_id,
+            message.from_user.id,
             managed_update_id,
             message.video.duration,
         )
-        if result == VideoLimitConsumption.CONSUMED:
+        if charge.result == ManagedBotVideoLimitResult.FORBIDDEN:
+            await message.answer("This personal bot is available only to its recipient.")
+        elif charge.result == ManagedBotVideoLimitResult.CONSUMED:
             await message.answer(
                 f"Video accepted: {message.video.duration} seconds charged. "
-                f"Remaining limit: {balance} seconds."
+                f"Remaining limit: {charge.remaining_seconds} seconds."
             )
-        elif result == VideoLimitConsumption.INSUFFICIENT:
+        elif charge.result == ManagedBotVideoLimitResult.INSUFFICIENT:
             await message.answer(
                 f"This video is {message.video.duration} seconds, but only "
-                f"{balance} seconds remain. "
+                f"{charge.remaining_seconds} seconds remain. "
                 "Ask the administrator to add more time."
             )
-        return {"status": result.value}
+        return {"status": charge.result.value}
 
     result = await asyncio.to_thread(
         activation_service.handle_claim,

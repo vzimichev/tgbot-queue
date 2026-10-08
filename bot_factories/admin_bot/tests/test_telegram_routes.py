@@ -5,10 +5,11 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from bot_factories.admin_bot import telegram_routes as routes
-from bot_factories.admin_bot.db.managed_bot_limit_transactions import (
-    VideoLimitConsumption,
-)
 from bot_factories.admin_bot.db.managed_bots import ActivationResult, ManagedBotStatus
+from bot_factories.admin_bot.repositories.managed_bot_video_limits import (
+    ManagedBotVideoLimitCharge,
+    ManagedBotVideoLimitResult,
+)
 
 
 def test_parse_seconds_accepts_only_positive_ascii_integers():
@@ -76,11 +77,17 @@ def test_active_managed_bot_charges_the_sent_video(monkeypatch, managed_bot):
     )
     bot = managed_bot(status=ManagedBotStatus.ACTIVE, remaining_seconds=48)
     monkeypatch.setattr(routes.managed_bots_repository, "get_by_telegram_bot_id", Mock(return_value=bot))
-    consume = Mock(return_value=(VideoLimitConsumption.CONSUMED, 48))
-    monkeypatch.setattr(routes.managed_bot_limits_repository, "consume_video_limit", consume)
+    charge_video = Mock(
+        return_value=ManagedBotVideoLimitCharge(
+            ManagedBotVideoLimitResult.CONSUMED, 48
+        )
+    )
+    monkeypatch.setattr(
+        routes.managed_bot_video_limits_repository, "charge_video", charge_video
+    )
 
     assert asyncio.run(routes.process_managed_bot_message(message, 99, 12)) == {"status": "consumed"}
-    consume.assert_called_once_with(bot.id, 12, 12)
+    charge_video.assert_called_once_with(99, 7, 12, 12)
     message.answer.assert_awaited_once()
 
 
