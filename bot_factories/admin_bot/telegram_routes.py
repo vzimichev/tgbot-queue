@@ -1,5 +1,6 @@
 import asyncio
 import secrets
+from dataclasses import replace
 
 from aiogram import F, Router
 from aiogram.client.bot import Bot
@@ -25,9 +26,14 @@ from bot_factories.admin_bot.repositories.bot_activation import (
 )
 from bot_factories.admin_bot.telegram_api import ManagedBotTelegramApi
 from bot_factories.admin_bot.repositories.managed_bots import ManagedBotsRepository
+from bot_factories.admin_bot.repositories.managed_bot_limits import (
+    ManagedBotVideoLimitResult,
+    ManagedBotLimitsRepository,
+)
 
 
 managed_bots_repository = ManagedBotsRepository()
+managed_bot_limits_repository = ManagedBotLimitsRepository()
 activation_service = ManagedBotActivationService(
     managed_bots_repository,
     ManagedBotTelegramApi(),
@@ -175,8 +181,8 @@ async def handle_limit(query: CallbackQuery, state: FSMContext) -> None:
         return
 
     try:
-        bot = await asyncio.to_thread(
-            managed_bots_repository.add_limit,
+        balance = await asyncio.to_thread(
+            managed_bot_limits_repository.add_limit,
             bot_id,
             seconds_to_add,
         )
@@ -184,8 +190,12 @@ async def handle_limit(query: CallbackQuery, state: FSMContext) -> None:
         await query.answer("Bot not found.")
         return
 
+    bot = await asyncio.to_thread(managed_bots_repository.get_bot, bot_id)
+    if bot is None:
+        await query.answer("Bot not found.")
+        return
     await query.answer()
-    await show_bot_card(query.message, bot)
+    await show_bot_card(query.message, replace(bot, remaining_seconds=balance))
 
 
 @admin_router.message(StateFilter(AdminFlow.choosing_recipient))
@@ -282,8 +292,8 @@ async def receive_additional_limit(message: Message, state: FSMContext) -> None:
         return
 
     try:
-        bot = await asyncio.to_thread(
-            managed_bots_repository.add_limit,
+        balance = await asyncio.to_thread(
+            managed_bot_limits_repository.add_limit,
             bot_id,
             seconds,
         )
@@ -292,8 +302,13 @@ async def receive_additional_limit(message: Message, state: FSMContext) -> None:
         await message.answer("Bot not found. Start again.")
         return
 
+    bot = await asyncio.to_thread(managed_bots_repository.get_bot, bot_id)
+    if bot is None:
+        await state.clear()
+        await message.answer("Bot not found. Start again.")
+        return
     await state.clear()
-    await show_bot_card(message, bot)
+    await show_bot_card(message, replace(bot, remaining_seconds=balance))
 
 
 @admin_router.managed_bot()
@@ -356,6 +371,29 @@ async def process_managed_bot_message(
 ) -> dict[str, str]:
     if message.from_user is None:
         return {"status": "ignored"}
+
+    if getattr(message, "video", None) is not None:
+        charge = await asyncio.to_thread(
+            managed_bot_limits_repository.charge_video,
+            managed_bot_id,
+            message.from_user.id,
+            managed_update_id,
+            message.video.duration,
+        )
+        if charge.result == ManagedBotVideoLimitResult.FORBIDDEN:
+            await message.answer("This personal bot is available only to its recipient.")
+        elif charge.result == ManagedBotVideoLimitResult.CONSUMED:
+            await message.answer(
+                f"Video accepted: {message.video.duration} seconds charged. "
+                f"Remaining limit: {charge.remaining_seconds} seconds."
+            )
+        elif charge.result == ManagedBotVideoLimitResult.INSUFFICIENT:
+            await message.answer(
+                f"This video is {message.video.duration} seconds, but only "
+                f"{charge.remaining_seconds} seconds remain. "
+                "Ask the administrator to add more time."
+            )
+        return {"status": charge.result.value}
 
     result = await asyncio.to_thread(
         activation_service.handle_claim,

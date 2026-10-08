@@ -6,6 +6,10 @@ import pytest
 
 from bot_factories.admin_bot import telegram_routes as routes
 from bot_factories.admin_bot.db.managed_bots import ActivationResult, ManagedBotStatus
+from bot_factories.admin_bot.repositories.managed_bot_limits import (
+    ManagedBotVideoLimitCharge,
+    ManagedBotVideoLimitResult,
+)
 
 
 def test_parse_seconds_accepts_only_positive_ascii_integers():
@@ -63,6 +67,28 @@ def test_managed_message_without_sender_is_ignored():
     message = SimpleNamespace(from_user=None)
 
     assert asyncio.run(routes.process_managed_bot_message(message, 99, 12)) == {"status": "ignored"}
+
+
+def test_active_managed_bot_charges_the_sent_video(monkeypatch, managed_bot):
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=7),
+        video=SimpleNamespace(duration=12),
+        answer=AsyncMock(),
+    )
+    bot = managed_bot(status=ManagedBotStatus.ACTIVE, remaining_seconds=48)
+    monkeypatch.setattr(routes.managed_bots_repository, "get_by_telegram_bot_id", Mock(return_value=bot))
+    charge_video = Mock(
+        return_value=ManagedBotVideoLimitCharge(
+            ManagedBotVideoLimitResult.CONSUMED, 48
+        )
+    )
+    monkeypatch.setattr(
+        routes.managed_bot_limits_repository, "charge_video", charge_video
+    )
+
+    assert asyncio.run(routes.process_managed_bot_message(message, 99, 12)) == {"status": "consumed"}
+    charge_video.assert_called_once_with(99, 7, 12, 12)
+    message.answer.assert_awaited_once()
 
 
 def test_register_managed_bot_only_accepts_owner_and_prepares_record(monkeypatch, managed_bot):

@@ -138,7 +138,10 @@ ordinary bot link after activation). For a pending creation, it shows the
 for seconds to add. **Все боты** lists saved bots and invitations. Parameters
 and managed bot tokens are stored in
 `bot_factories/admin_bot/.cache/admin.sqlite3`.
-The generated bots have no handlers yet; the limit is stored but is not spent.
+After activation, a personal bot spends its limit by the duration (in whole
+seconds) of each video sent to it. A video is accepted only when its full
+duration fits in the remaining limit; retried Telegram webhook deliveries do
+not spend the limit twice.
 
 ## Running the Cloud Gateway
 

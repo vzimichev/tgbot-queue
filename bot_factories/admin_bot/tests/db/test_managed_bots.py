@@ -46,6 +46,8 @@ def test_update_and_add_seconds_keep_persisted_values(crud, managed_bot):
         crud.update(managed_bot(id=999))
 
 
+
+
 def test_initialize_upgrades_legacy_table_with_activation_columns():
     connection = sqlite3.connect(":memory:")
     connection.execute(
