@@ -109,8 +109,10 @@ The Compose file runs one gateway deployment.
 ### Admin bot factory
 
 Copy `bot_factories/admin_bot/.env.example` to `bot_factories/admin_bot/.env`,
-set `ADMIN_BOT_TOKEN`, your numeric `ADMIN_BOT_OWNER_ID`, and the SSH/Redis
-settings for its gateway. Enable Bot Management Mode for the admin bot in
+set `ADMIN_BOT_TOKEN`, your numeric `ADMIN_BOT_OWNER_ID`,
+`WEBHOOK_SECRET_TOKEN` from that gateway's `.env`, and the SSH/Redis settings
+for its gateway. `ADMIN_BOT_CHILD_WEBHOOK_URL` must point to that gateway's
+`/webhook/managed` endpoint. Enable Bot Management Mode for the admin bot in
 BotFather. Set the admin bot's webhook to that gateway's `/webhook` endpoint
 with `allowed_updates=["message", "managed_bot", "callback_query"]`. The gateway publishes the
 usual `telegram.process_update` task to `telegram_updates`; the admin worker

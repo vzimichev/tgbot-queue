@@ -127,7 +127,14 @@ class ManagedBotActivationService:
                     )
                 )
                 return ActivationResult.CONFIGURED
+        except RuntimeError:
+            # Telegram may reject adding an account without a username to the
+            # managed bot's access list.  Keep the personal bot usable by
+            # reopening it and enforcing the persisted Telegram ID in the app.
+            # This is also the safe fallback for any unverifiable restriction.
+            pass
 
+        try:
             self.telegram_api.set_access_open(telegram_bot_id)
             reopened = self.telegram_api.get_access_settings(telegram_bot_id)
             if reopened.get("is_access_restricted") is False:
