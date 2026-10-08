@@ -126,6 +126,7 @@ async def card_back_to_menu(query: CallbackQuery, state: FSMContext) -> None:
 async def list_bots(message: Message, state: FSMContext) -> None:
     """Show cards for every managed bot, abandoning any unfinished dialogue."""
     await state.clear()
+    await state.set_state(AdminFlow.choosing_recipient)
     bots = await asyncio.to_thread(managed_bots_repository.list_bots)
     if not bots:
         await message.answer(
