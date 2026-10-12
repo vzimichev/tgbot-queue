@@ -35,7 +35,7 @@ class ManagedBotTransactionsCrud:
         row = self.connection.execute(
             """
             SELECT COALESCE(SUM(seconds), 0) AS balance
-            FROM managed_bot_limit_transactions
+            FROM managed_bot_transactions
             WHERE managed_bot_id = ?
             """,
             (managed_bot_id,),
@@ -46,7 +46,7 @@ class ManagedBotTransactionsCrud:
         return (
             self.connection.execute(
                 """
-                SELECT 1 FROM managed_bot_limit_transactions
+                SELECT 1 FROM managed_bot_transactions
                 WHERE managed_bot_id = ? AND webhook_update_id = ?
                 """,
                 (managed_bot_id, webhook_update_id),
@@ -67,7 +67,7 @@ class ManagedBotTransactionsCrud:
 
     def get_by_id(self, transaction_id: int) -> ManagedBotTransactionRow | None:
         row = self.connection.execute(
-            "SELECT * FROM managed_bot_limit_transactions WHERE id = ?",
+            "SELECT * FROM managed_bot_transactions WHERE id = ?",
             (transaction_id,),
         ).fetchone()
         return self._to_transaction(row) if row else None
@@ -77,7 +77,7 @@ class ManagedBotTransactionsCrud:
     ) -> list[ManagedBotTransactionRow]:
         rows = self.connection.execute(
             """
-            SELECT * FROM managed_bot_limit_transactions
+            SELECT * FROM managed_bot_transactions
             WHERE managed_bot_id = ?
             ORDER BY id
             """,
@@ -95,7 +95,7 @@ class ManagedBotTransactionsCrud:
     ) -> ManagedBotTransactionRow:
         cursor = self.connection.execute(
             """
-            INSERT INTO managed_bot_limit_transactions (
+            INSERT INTO managed_bot_transactions (
                 managed_bot_id, seconds, transaction_type, webhook_update_id
             ) VALUES (?, ?, ?, ?)
             """,

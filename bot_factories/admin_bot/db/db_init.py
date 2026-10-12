@@ -46,7 +46,7 @@ def initialize(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         """
-        CREATE TABLE IF NOT EXISTS managed_bot_limit_transactions (
+        CREATE TABLE IF NOT EXISTS managed_bot_transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             managed_bot_id INTEGER NOT NULL REFERENCES managed_bots(id),
             seconds INTEGER NOT NULL,
@@ -61,43 +61,43 @@ def initialize(connection: sqlite3.Connection) -> None:
     transaction_columns = {
         row[1]
         for row in connection.execute(
-            "PRAGMA table_info(managed_bot_limit_transactions)"
+            "PRAGMA table_info(managed_bot_transactions)"
         )
     }
     if "created_at" not in transaction_columns:
         connection.execute(
-            "ALTER TABLE managed_bot_limit_transactions ADD COLUMN created_at TEXT"
+            "ALTER TABLE managed_bot_transactions ADD COLUMN created_at TEXT"
         )
         connection.execute(
             """
-            UPDATE managed_bot_limit_transactions
+            UPDATE managed_bot_transactions
             SET created_at = CURRENT_TIMESTAMP
             WHERE created_at IS NULL
             """
         )
     connection.execute(
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS managed_bot_limit_transactions_video_update_idx
-        ON managed_bot_limit_transactions(managed_bot_id, webhook_update_id)
+        CREATE UNIQUE INDEX IF NOT EXISTS managed_bot_transactions_video_update_idx
+        ON managed_bot_transactions(managed_bot_id, webhook_update_id)
         WHERE webhook_update_id IS NOT NULL
         """
     )
     connection.execute(
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS managed_bot_limit_transactions_opening_idx
-        ON managed_bot_limit_transactions(managed_bot_id)
+        CREATE UNIQUE INDEX IF NOT EXISTS managed_bot_transactions_opening_idx
+        ON managed_bot_transactions(managed_bot_id)
         WHERE transaction_type = 'opening_balance'
         """
     )
     connection.execute(
         """
-        INSERT INTO managed_bot_limit_transactions (
+        INSERT INTO managed_bot_transactions (
             managed_bot_id, seconds, transaction_type
         )
         SELECT id, remaining_seconds, 'opening_balance'
         FROM managed_bots
         WHERE NOT EXISTS (
-            SELECT 1 FROM managed_bot_limit_transactions
+            SELECT 1 FROM managed_bot_transactions
             WHERE managed_bot_id = managed_bots.id
               AND transaction_type = 'opening_balance'
         )
