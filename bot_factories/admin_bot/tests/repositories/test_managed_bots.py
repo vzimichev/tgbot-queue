@@ -3,13 +3,13 @@ from dataclasses import replace
 import pytest
 
 from bot_factories.admin_bot.db import db_engine
-from bot_factories.admin_bot.db.managed_bot_limit_transactions import (
-    VideoLimitConsumption,
+from bot_factories.admin_bot.db.managed_bot_transactions import (
+    VideoConsumption,
 )
 from bot_factories.admin_bot.db.managed_bots import ManagedBotStatus
 from bot_factories.admin_bot.repositories.bot_manager import ManagedBotsRepository
-from bot_factories.admin_bot.repositories.managed_bot_limits import (
-    ManagedBotLimitsRepository,
+from bot_factories.admin_bot.repositories.managed_bot_transactions import (
+    ManagedBotTransactionsRepository,
 )
 
 
@@ -36,7 +36,7 @@ def test_create_register_and_reopen_pending_bot(repository):
 
 def test_repository_validates_unique_recipients_and_limits(repository):
     pending = repository.create_pending_bot(42, None, "Alice", 1)
-    limits = ManagedBotLimitsRepository()
+    limits = ManagedBotTransactionsRepository()
 
     with pytest.raises(ValueError, match="already assigned"):
         repository.create_pending_bot(42, None, "Alice", 1)
@@ -53,7 +53,7 @@ def test_register_rejects_changed_username_and_adds_limit(repository):
 
     assert repository.register_created_bot(99, "different_bot", "Bot") is None
     registered = repository.register_created_bot(99, pending.username, "Bot")
-    assert ManagedBotLimitsRepository().add_limit(registered.id, 10) == 15
+    assert ManagedBotTransactionsRepository().add_limit(registered.id, 10) == 15
     assert (
         repository.get_invitation(registered.id) == f"https://t.me/{pending.username}"
     )
@@ -65,15 +65,15 @@ def test_consuming_video_limit_is_idempotent_and_never_overspends(repository):
     assert registered is not None
     active = repository.save(replace(registered, status=ManagedBotStatus.ACTIVE))
 
-    limits = ManagedBotLimitsRepository()
+    limits = ManagedBotTransactionsRepository()
     result, charged = limits.consume_video_limit(active.id, 101, 6)
-    assert result == VideoLimitConsumption.CONSUMED
+    assert result == VideoConsumption.CONSUMED
     assert charged == 4
 
     duplicate, unchanged = limits.consume_video_limit(active.id, 101, 6)
-    assert duplicate == VideoLimitConsumption.DUPLICATE
+    assert duplicate == VideoConsumption.DUPLICATE
     assert unchanged == 4
 
     insufficient, unchanged = limits.consume_video_limit(active.id, 102, 6)
-    assert insufficient == VideoLimitConsumption.INSUFFICIENT
+    assert insufficient == VideoConsumption.INSUFFICIENT
     assert unchanged == 4

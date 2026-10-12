@@ -4,13 +4,13 @@ from datetime import datetime
 from enum import StrEnum
 
 
-class LimitTransactionType(StrEnum):
+class TransactionType(StrEnum):
     OPENING_BALANCE = "opening_balance"
     TOP_UP = "top_up"
     VIDEO_DEBIT = "video_debit"
 
 
-class VideoLimitConsumption(StrEnum):
+class VideoConsumption(StrEnum):
     CONSUMED = "consumed"
     DUPLICATE = "duplicate"
     INSUFFICIENT = "insufficient"
@@ -18,16 +18,16 @@ class VideoLimitConsumption(StrEnum):
 
 
 @dataclass(frozen=True)
-class ManagedBotLimitTransactionRow:
+class ManagedBotTransactionRow:
     id: int
     managed_bot_id: int
     seconds: int
-    transaction_type: LimitTransactionType
+    transaction_type: TransactionType
     webhook_update_id: int | None
     created_at: datetime
 
 
-class ManagedBotLimitTransactionsCrud:
+class ManagedBotTransactionsCrud:
     def __init__(self, connection: sqlite3.Connection):
         self.connection = connection
 
@@ -55,17 +55,17 @@ class ManagedBotLimitTransactionsCrud:
         )
 
     @staticmethod
-    def _to_transaction(row: sqlite3.Row) -> ManagedBotLimitTransactionRow:
-        return ManagedBotLimitTransactionRow(
+    def _to_transaction(row: sqlite3.Row) -> ManagedBotTransactionRow:
+        return ManagedBotTransactionRow(
             id=row["id"],
             managed_bot_id=row["managed_bot_id"],
             seconds=row["seconds"],
-            transaction_type=LimitTransactionType(row["transaction_type"]),
+            transaction_type=TransactionType(row["transaction_type"]),
             webhook_update_id=row["webhook_update_id"],
             created_at=datetime.fromisoformat(row["created_at"].replace(" ", "T")),
         )
 
-    def get_by_id(self, transaction_id: int) -> ManagedBotLimitTransactionRow | None:
+    def get_by_id(self, transaction_id: int) -> ManagedBotTransactionRow | None:
         row = self.connection.execute(
             "SELECT * FROM managed_bot_limit_transactions WHERE id = ?",
             (transaction_id,),
@@ -74,7 +74,7 @@ class ManagedBotLimitTransactionsCrud:
 
     def list_for_managed_bot(
         self, managed_bot_id: int
-    ) -> list[ManagedBotLimitTransactionRow]:
+    ) -> list[ManagedBotTransactionRow]:
         rows = self.connection.execute(
             """
             SELECT * FROM managed_bot_limit_transactions
@@ -89,10 +89,10 @@ class ManagedBotLimitTransactionsCrud:
         self,
         managed_bot_id: int,
         seconds: int,
-        transaction_type: LimitTransactionType,
+        transaction_type: TransactionType,
         *,
         webhook_update_id: int | None = None,
-    ) -> ManagedBotLimitTransactionRow:
+    ) -> ManagedBotTransactionRow:
         cursor = self.connection.execute(
             """
             INSERT INTO managed_bot_limit_transactions (

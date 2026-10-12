@@ -6,9 +6,9 @@ import pytest
 
 from bot_factories.admin_bot import telegram_routes as routes
 from bot_factories.admin_bot.db.managed_bots import ActivationResult, ManagedBotStatus
-from bot_factories.admin_bot.repositories.managed_bot_limits import (
-    ManagedBotVideoLimitCharge,
-    ManagedBotVideoLimitResult,
+from bot_factories.admin_bot.repositories.managed_bot_transactions import (
+    ManagedBotVideoCharge,
+    ManagedBotVideoChargeResult,
 )
 
 
@@ -84,10 +84,10 @@ def test_active_managed_bot_charges_the_sent_video(monkeypatch, managed_bot):
         routes.managed_bots_repository, "get_by_telegram_bot_id", Mock(return_value=bot)
     )
     charge_video = Mock(
-        return_value=ManagedBotVideoLimitCharge(ManagedBotVideoLimitResult.CONSUMED, 48)
+        return_value=ManagedBotVideoCharge(ManagedBotVideoChargeResult.CONSUMED, 48)
     )
     monkeypatch.setattr(
-        routes.managed_bot_limits_repository, "charge_video", charge_video
+        routes.managed_bot_transactions_repository, "charge_video", charge_video
     )
 
     assert asyncio.run(routes.process_managed_bot_message(message, 99, 12)) == {

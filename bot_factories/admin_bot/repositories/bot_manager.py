@@ -3,8 +3,8 @@ import sqlite3
 from dataclasses import replace
 
 from bot_factories.admin_bot.db.db_engine import transaction, transactional
-from bot_factories.admin_bot.db.managed_bot_limit_transactions import (
-    ManagedBotLimitTransactionsCrud,
+from bot_factories.admin_bot.db.managed_bot_transactions import (
+    ManagedBotTransactionsCrud,
 )
 from bot_factories.admin_bot.db.managed_bots import (
     ManagedBotRow,
@@ -96,7 +96,7 @@ class ManagedBotsRepository:
                         status=ManagedBotStatus.PENDING_CREATION,
                     )
                 )
-                ManagedBotLimitTransactionsCrud(connection).add(
+                ManagedBotTransactionsCrud(connection).add(
                     bot.id, initial_seconds, "opening_balance"
                 )
                 return self._with_balance(bot, connection)
@@ -167,7 +167,7 @@ class ManagedBotsRepository:
             return None
         return replace(
             bot,
-            remaining_seconds=ManagedBotLimitTransactionsCrud(connection).balance(
+            remaining_seconds=ManagedBotTransactionsCrud(connection).balance(
                 bot.id
             ),
         )

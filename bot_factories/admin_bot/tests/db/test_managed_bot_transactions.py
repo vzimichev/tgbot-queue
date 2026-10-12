@@ -1,9 +1,9 @@
 import sqlite3
 
 from bot_factories.admin_bot.db.db_init import initialize
-from bot_factories.admin_bot.db.managed_bot_limit_transactions import (
-    LimitTransactionType,
-    ManagedBotLimitTransactionsCrud,
+from bot_factories.admin_bot.db.managed_bot_transactions import (
+    ManagedBotTransactionsCrud,
+    TransactionType,
 )
 
 
@@ -17,11 +17,11 @@ def test_transaction_crud_records_and_calculates_a_balance():
         VALUES ('personal_bot', 'Personal', 7, 0, 'active')
         """
     )
-    transactions = ManagedBotLimitTransactionsCrud(connection)
+    transactions = ManagedBotTransactionsCrud(connection)
 
-    opening = transactions.add(1, 60, LimitTransactionType.OPENING_BALANCE)
+    opening = transactions.add(1, 60, TransactionType.OPENING_BALANCE)
     debit = transactions.add(
-        1, -12, LimitTransactionType.VIDEO_DEBIT, webhook_update_id=101
+        1, -12, TransactionType.VIDEO_DEBIT, webhook_update_id=101
     )
 
     assert transactions.balance(1) == 48
