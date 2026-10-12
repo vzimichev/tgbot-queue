@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import Update
 from celery import shared_task
 
-from bot_factories.admin_bot.repositories.managed_bots import ManagedBotsRepository
+from bot_factories.admin_bot.repositories.bot_manager import ManagedBotsRepository
 from bot_factories.admin_bot.telegram_routes import managed_bot_router
 
 

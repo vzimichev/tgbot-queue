@@ -9,7 +9,7 @@ from bot_factories.admin_bot.db.managed_bots import (
     ManagedBotStatus,
 )
 from bot_factories.admin_bot.telegram_api import ManagedBotTelegramApi
-from bot_factories.admin_bot.repositories.managed_bots import ManagedBotsRepository
+from bot_factories.admin_bot.repositories.bot_manager import ManagedBotsRepository
 
 
 class ManagedBotActivationService:

@@ -25,7 +25,7 @@ from bot_factories.admin_bot.repositories.bot_activation import (
     ManagedBotActivationService,
 )
 from bot_factories.admin_bot.telegram_api import ManagedBotTelegramApi
-from bot_factories.admin_bot.repositories.managed_bots import ManagedBotsRepository
+from bot_factories.admin_bot.repositories.bot_manager import ManagedBotsRepository
 from bot_factories.admin_bot.repositories.managed_bot_limits import (
     ManagedBotVideoLimitResult,
     ManagedBotLimitsRepository,

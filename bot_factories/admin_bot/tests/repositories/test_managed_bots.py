@@ -7,7 +7,7 @@ from bot_factories.admin_bot.db.managed_bot_limit_transactions import (
     VideoLimitConsumption,
 )
 from bot_factories.admin_bot.db.managed_bots import ManagedBotStatus
-from bot_factories.admin_bot.repositories.managed_bots import ManagedBotsRepository
+from bot_factories.admin_bot.repositories.bot_manager import ManagedBotsRepository
 from bot_factories.admin_bot.repositories.managed_bot_limits import (
     ManagedBotLimitsRepository,
 )
