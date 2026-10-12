@@ -35,7 +35,8 @@ class ManagedBotsRepository:
         connection: sqlite3.Connection,
     ) -> ManagedBotRow | None:
         return self._with_balance(
-            ManagedBotsCrud(connection).get_by_telegram_bot_id(telegram_bot_id), connection
+            ManagedBotsCrud(connection).get_by_telegram_bot_id(telegram_bot_id),
+            connection,
         )
 
     @transactional
@@ -45,7 +46,9 @@ class ManagedBotsRepository:
         *,
         connection: sqlite3.Connection,
     ) -> ManagedBotRow | None:
-        return self._with_balance(ManagedBotsCrud(connection).get_by_id(bot_id), connection)
+        return self._with_balance(
+            ManagedBotsCrud(connection).get_by_id(bot_id), connection
+        )
 
     @transactional
     def list_bots(
@@ -164,5 +167,7 @@ class ManagedBotsRepository:
             return None
         return replace(
             bot,
-            remaining_seconds=ManagedBotLimitTransactionsCrud(connection).balance(bot.id),
+            remaining_seconds=ManagedBotLimitTransactionsCrud(connection).balance(
+                bot.id
+            ),
         )

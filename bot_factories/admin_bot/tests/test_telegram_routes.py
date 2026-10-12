@@ -32,7 +32,9 @@ def test_is_owner_rejects_groups_and_other_users(monkeypatch):
     assert not routes.is_owner(event(7, -7))
 
 
-def test_recover_card_activation_skips_active_and_complete_records(monkeypatch, managed_bot):
+def test_recover_card_activation_skips_active_and_complete_records(
+    monkeypatch, managed_bot
+):
     recovered = Mock()
     monkeypatch.setattr(routes.activation_service, "recover_activation", recovered)
 
@@ -66,7 +68,9 @@ def test_managed_message_returns_status_and_only_sends_known_responses(monkeypat
 def test_managed_message_without_sender_is_ignored():
     message = SimpleNamespace(from_user=None)
 
-    assert asyncio.run(routes.process_managed_bot_message(message, 99, 12)) == {"status": "ignored"}
+    assert asyncio.run(routes.process_managed_bot_message(message, 99, 12)) == {
+        "status": "ignored"
+    }
 
 
 def test_active_managed_bot_charges_the_sent_video(monkeypatch, managed_bot):
@@ -76,35 +80,47 @@ def test_active_managed_bot_charges_the_sent_video(monkeypatch, managed_bot):
         answer=AsyncMock(),
     )
     bot = managed_bot(status=ManagedBotStatus.ACTIVE, remaining_seconds=48)
-    monkeypatch.setattr(routes.managed_bots_repository, "get_by_telegram_bot_id", Mock(return_value=bot))
+    monkeypatch.setattr(
+        routes.managed_bots_repository, "get_by_telegram_bot_id", Mock(return_value=bot)
+    )
     charge_video = Mock(
-        return_value=ManagedBotVideoLimitCharge(
-            ManagedBotVideoLimitResult.CONSUMED, 48
-        )
+        return_value=ManagedBotVideoLimitCharge(ManagedBotVideoLimitResult.CONSUMED, 48)
     )
     monkeypatch.setattr(
         routes.managed_bot_limits_repository, "charge_video", charge_video
     )
 
-    assert asyncio.run(routes.process_managed_bot_message(message, 99, 12)) == {"status": "consumed"}
+    assert asyncio.run(routes.process_managed_bot_message(message, 99, 12)) == {
+        "status": "consumed"
+    }
     charge_video.assert_called_once_with(99, 7, 12, 12)
     message.answer.assert_awaited_once()
 
 
-def test_register_managed_bot_only_accepts_owner_and_prepares_record(monkeypatch, managed_bot):
+def test_register_managed_bot_only_accepts_owner_and_prepares_record(
+    monkeypatch, managed_bot
+):
     record = managed_bot(telegram_bot_id=99)
     register = Mock(return_value=record)
     prepare = Mock(return_value=record)
     monkeypatch.setattr(routes.admin_bot_settings, "owner_id", 7)
-    monkeypatch.setattr(routes.managed_bots_repository, "register_created_bot", register)
+    monkeypatch.setattr(
+        routes.managed_bots_repository, "register_created_bot", register
+    )
     monkeypatch.setattr(routes.activation_service, "prepare_activation", prepare)
     bot = SimpleNamespace(send_message=AsyncMock())
 
-    foreign = SimpleNamespace(user=SimpleNamespace(id=8), bot_user=SimpleNamespace(id=99, username="personal_bot", first_name="Personal"))
+    foreign = SimpleNamespace(
+        user=SimpleNamespace(id=8),
+        bot_user=SimpleNamespace(id=99, username="personal_bot", first_name="Personal"),
+    )
     asyncio.run(routes.register_managed_bot(foreign, bot))
     register.assert_not_called()
 
-    event = SimpleNamespace(user=SimpleNamespace(id=7), bot_user=SimpleNamespace(id=99, username="personal_bot", first_name="Personal"))
+    event = SimpleNamespace(
+        user=SimpleNamespace(id=7),
+        bot_user=SimpleNamespace(id=99, username="personal_bot", first_name="Personal"),
+    )
     asyncio.run(routes.register_managed_bot(event, bot))
     register.assert_called_once_with(99, "personal_bot", "Personal")
     prepare.assert_called_once_with(record.id)

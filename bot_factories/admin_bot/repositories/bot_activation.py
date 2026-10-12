@@ -13,6 +13,10 @@ from bot_factories.admin_bot.repositories.managed_bots import ManagedBotsReposit
 
 
 class ManagedBotActivationService:
+    """
+    Managed bots require activation management.
+    """
+
     def __init__(
         self,
         repository: ManagedBotsRepository,

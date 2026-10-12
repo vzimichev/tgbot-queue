@@ -28,7 +28,9 @@ def test_create_register_and_reopen_pending_bot(repository):
 
     assert registered.telegram_bot_id == 99
     assert registered.status == ManagedBotStatus.AWAITING_ACTIVATION
-    assert repository.register_created_bot(99, pending.username, "Alice bot") == registered
+    assert (
+        repository.register_created_bot(99, pending.username, "Alice bot") == registered
+    )
     assert repository.get_by_telegram_bot_id(99) == registered
 
 
@@ -52,7 +54,9 @@ def test_register_rejects_changed_username_and_adds_limit(repository):
     assert repository.register_created_bot(99, "different_bot", "Bot") is None
     registered = repository.register_created_bot(99, pending.username, "Bot")
     assert ManagedBotLimitsRepository().add_limit(registered.id, 10) == 15
-    assert repository.get_invitation(registered.id) == f"https://t.me/{pending.username}"
+    assert (
+        repository.get_invitation(registered.id) == f"https://t.me/{pending.username}"
+    )
 
 
 def test_consuming_video_limit_is_idempotent_and_never_overspends(repository):
