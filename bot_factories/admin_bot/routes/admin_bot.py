@@ -21,21 +21,10 @@ from bot_factories.admin_bot.telegram_cards import (
     user_card,
 )
 from bot_factories.admin_bot.db.managed_bots import ManagedBotStatus
-from bot_factories.admin_bot.repositories.bot_activation import (
-    ManagedBotActivationService,
-)
-from bot_factories.admin_bot.telegram_api import ManagedBotTelegramApi
-from bot_factories.admin_bot.repositories.bot_manager import ManagedBotsRepository
-from bot_factories.admin_bot.repositories.managed_bot_transactions import (
-    ManagedBotTransactionsRepository,
-)
-
-
-managed_bots_repository = ManagedBotsRepository()
-managed_bot_transactions_repository = ManagedBotTransactionsRepository()
-activation_service = ManagedBotActivationService(
+from bot_factories.admin_bot.dependencies import (
+    activation_service,
+    managed_bot_transactions_repository,
     managed_bots_repository,
-    ManagedBotTelegramApi(),
 )
 
 

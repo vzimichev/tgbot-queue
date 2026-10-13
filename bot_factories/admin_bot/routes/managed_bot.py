@@ -4,23 +4,15 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from bot_factories.admin_bot.repositories.bot_activation import (
-    ManagedBotActivationService,
-)
-from bot_factories.admin_bot.telegram_api import ManagedBotTelegramApi
-from bot_factories.admin_bot.repositories.bot_manager import ManagedBotsRepository
 from bot_factories.admin_bot.repositories.bot_manager import ManagedBotAccountResult
 from bot_factories.admin_bot.repositories.managed_bot_transactions import (
-    ManagedBotTransactionsRepository,
     ManagedBotVideoChargeResult,
 )
 from bot_factories.admin_bot.db.managed_bot_transactions import TransactionType
-
-managed_bots_repository = ManagedBotsRepository()
-managed_bot_transactions_repository = ManagedBotTransactionsRepository()
-activation_service = ManagedBotActivationService(
+from bot_factories.admin_bot.dependencies import (
+    activation_service,
+    managed_bot_transactions_repository,
     managed_bots_repository,
-    ManagedBotTelegramApi(),
 )
 
 managed_bot_router = Router()
