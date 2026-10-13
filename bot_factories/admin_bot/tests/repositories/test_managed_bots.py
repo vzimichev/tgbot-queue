@@ -77,3 +77,18 @@ def test_consuming_video_limit_is_idempotent_and_never_overspends(repository):
     insufficient, unchanged = limits.consume_video_limit(active.id, 102, 6)
     assert insufficient == VideoConsumption.INSUFFICIENT
     assert unchanged == 4
+
+
+def test_recipient_can_read_its_balance_and_recent_transactions(repository):
+    pending = repository.create_pending_bot(42, None, "Alice", 10)
+    registered = repository.register_created_bot(99, pending.username, "Bot")
+    assert registered is not None
+    active = repository.save(replace(registered, status=ManagedBotStatus.ACTIVE))
+    limits = ManagedBotTransactionsRepository()
+    limits.add_limit(active.id, 5)
+
+    account = repository.get_managed_bot_account(99, 42)
+
+    assert account.remaining_seconds == 15
+    assert [transaction.seconds for transaction in account.transactions] == [10, 5]
+    assert repository.get_managed_bot_account(99, 100).result == "forbidden"

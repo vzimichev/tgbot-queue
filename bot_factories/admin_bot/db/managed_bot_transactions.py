@@ -73,8 +73,23 @@ class ManagedBotTransactionsCrud:
         return self._to_transaction(row) if row else None
 
     def list_for_managed_bot(
-        self, managed_bot_id: int
+        self, managed_bot_id: int, *, limit: int | None = None
     ) -> list[ManagedBotTransactionRow]:
+        if limit is not None and limit <= 0:
+            raise ValueError("limit must be positive")
+        if limit is not None:
+            rows = self.connection.execute(
+                """
+                SELECT * FROM (
+                    SELECT * FROM managed_bot_transactions
+                    WHERE managed_bot_id = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                ) ORDER BY id
+                """,
+                (managed_bot_id, limit),
+            ).fetchall()
+            return [self._to_transaction(row) for row in rows]
         rows = self.connection.execute(
             """
             SELECT * FROM managed_bot_transactions

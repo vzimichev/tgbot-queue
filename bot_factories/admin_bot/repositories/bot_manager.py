@@ -1,6 +1,7 @@
 import secrets
 import sqlite3
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from enum import StrEnum
 
 from bot_factories.admin_bot.db.db_engine import transaction, transactional
 from bot_factories.admin_bot.db.managed_bot_transactions import (
@@ -13,6 +14,21 @@ from bot_factories.admin_bot.db.managed_bots import (
 )
 
 SUGGESTED_BOT_NAME = "My faceswap bot"
+
+
+class ManagedBotAccountResult(StrEnum):
+    AVAILABLE = "available"
+    INACTIVE = "inactive"
+    FORBIDDEN = "forbidden"
+
+
+@dataclass(frozen=True)
+class ManagedBotAccount:
+    """The recipient-visible ledger state for one managed bot."""
+
+    result: ManagedBotAccountResult
+    remaining_seconds: int | None = None
+    transactions: tuple = ()
 
 
 class ManagedBotsRepository:
@@ -48,6 +64,28 @@ class ManagedBotsRepository:
     ) -> ManagedBotRow | None:
         return self._with_balance(
             ManagedBotsCrud(connection).get_by_id(bot_id), connection
+        )
+
+    @transactional
+    def get_managed_bot_account(
+        self,
+        telegram_bot_id: int,
+        telegram_user_id: int,
+        *,
+        connection: sqlite3.Connection,
+    ) -> ManagedBotAccount:
+        """Return balance and recent ledger entries only to the assigned recipient."""
+        bot = ManagedBotsCrud(connection).get_by_telegram_bot_id(telegram_bot_id)
+        if bot is None or bot.status != ManagedBotStatus.ACTIVE:
+            return ManagedBotAccount(ManagedBotAccountResult.INACTIVE)
+        if bot.recipient_id != telegram_user_id:
+            return ManagedBotAccount(ManagedBotAccountResult.FORBIDDEN)
+
+        transactions = ManagedBotTransactionsCrud(connection)
+        return ManagedBotAccount(
+            ManagedBotAccountResult.AVAILABLE,
+            remaining_seconds=transactions.balance(bot.id),
+            transactions=tuple(transactions.list_for_managed_bot(bot.id, limit=20)),
         )
 
     @transactional

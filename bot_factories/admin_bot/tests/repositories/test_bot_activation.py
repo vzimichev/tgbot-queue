@@ -203,6 +203,23 @@ def test_active_bot_is_not_reconfigured_during_recovery():
     assert api.calls == []
 
 
+def test_card_recovery_skips_ready_bots_and_recovers_failed_ones():
+    ready = bot(child_bot_token="child", claim_token="claim")
+    ready_api = TelegramApi()
+    ready_service = ManagedBotActivationService(Repository(ready), ready_api)
+
+    assert ready_service.recover_card_activation(ready) == ready
+    assert ready_api.calls == []
+
+    failed = bot(status=ManagedBotStatus.ERROR)
+    failed_api = TelegramApi()
+    failed_service = ManagedBotActivationService(Repository(failed), failed_api)
+
+    recovered = failed_service.recover_card_activation(failed)
+    assert recovered.status == ManagedBotStatus.AWAITING_ACTIVATION
+    assert failed_api.calls == ["webhook", "open"]
+
+
 def test_duplicate_claim_update_does_not_change_activation():
     original = bot(
         child_bot_token="child",

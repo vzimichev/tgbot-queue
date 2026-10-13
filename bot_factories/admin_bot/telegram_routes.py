@@ -26,10 +26,12 @@ from bot_factories.admin_bot.repositories.bot_activation import (
 )
 from bot_factories.admin_bot.telegram_api import ManagedBotTelegramApi
 from bot_factories.admin_bot.repositories.bot_manager import ManagedBotsRepository
+from bot_factories.admin_bot.repositories.bot_manager import ManagedBotAccountResult
 from bot_factories.admin_bot.repositories.managed_bot_transactions import (
     ManagedBotTransactionsRepository,
     ManagedBotVideoChargeResult,
 )
+from bot_factories.admin_bot.db.managed_bot_transactions import TransactionType
 
 
 managed_bots_repository = ManagedBotsRepository()
@@ -146,7 +148,9 @@ async def list_bots(message: Message, state: FSMContext) -> None:
         reply_markup=main_menu_keyboard(),
     )
     for managed_bot in bots:
-        managed_bot = await recover_card_activation(managed_bot)
+        managed_bot = await asyncio.to_thread(
+            activation_service.recover_card_activation, managed_bot
+        )
         await show_bot_card(message, managed_bot)
 
 
@@ -216,7 +220,9 @@ async def receive_recipient(message: Message, state: FSMContext) -> None:
         await message.answer(card.text, reply_markup=card.reply_markup)
         return
     if existing_bot is not None:
-        existing_bot = await recover_card_activation(existing_bot)
+        existing_bot = await asyncio.to_thread(
+            activation_service.recover_card_activation, existing_bot
+        )
 
     card = user_card(
         user.user_id,
@@ -351,16 +357,58 @@ async def register_managed_bot(event: ManagedBotUpdated, bot: Bot) -> None:
     )
 
 
-async def recover_card_activation(record):
-    if record.status == ManagedBotStatus.ACTIVE or record.telegram_bot_id is None:
-        return record
-    if (
-        record.status == ManagedBotStatus.AWAITING_ACTIVATION
-        and record.claim_token
-        and record.child_bot_token
-    ):
-        return record
-    return await asyncio.to_thread(activation_service.recover_activation, record.id)
+async def _recipient_account_for_message(message: Message, managed_bot_id: int):
+    if message.from_user is None:
+        return None
+    account = await asyncio.to_thread(
+        managed_bots_repository.get_managed_bot_account,
+        managed_bot_id,
+        message.from_user.id,
+    )
+    if account.result == ManagedBotAccountResult.FORBIDDEN:
+        await message.answer("This personal bot is available only to its recipient.")
+        return None
+    if account.result == ManagedBotAccountResult.INACTIVE:
+        await message.answer("Access has not been activated yet. Use your activation link.")
+        return None
+    return account
+
+
+@managed_bot_router.message(Command("balance"))
+async def show_managed_bot_balance(message: Message, managed_bot_id: int) -> dict[str, str]:
+    """Show the recipient the remaining video-time allowance."""
+    account = await _recipient_account_for_message(message, managed_bot_id)
+    if account is None:
+        return {"status": "unavailable"}
+    await message.answer(f"Remaining limit: {account.remaining_seconds} seconds.")
+    return {"status": "balance"}
+
+
+@managed_bot_router.message(Command("transactions"))
+async def show_managed_bot_transactions(
+    message: Message, managed_bot_id: int
+) -> dict[str, str]:
+    """Show up to the 20 latest ledger entries to the bot recipient."""
+    account = await _recipient_account_for_message(message, managed_bot_id)
+    if account is None:
+        return {"status": "unavailable"}
+
+    type_labels = {
+        TransactionType.OPENING_BALANCE: "Initial limit",
+        TransactionType.TOP_UP: "Limit added",
+        TransactionType.VIDEO_DEBIT: "Video processed",
+    }
+    entries = "\n".join(
+        f"• {transaction.created_at:%Y-%m-%d %H:%M} — "
+        f"{type_labels[transaction.transaction_type]}: "
+        f"{transaction.seconds:+d} seconds"
+        for transaction in account.transactions
+    )
+    await message.answer(
+        f"Transactions (latest {len(account.transactions)}):\n{entries}\n\n"
+        f"Remaining limit: {account.remaining_seconds} seconds."
+    )
+    return {"status": "transactions"}
 
 
 @managed_bot_router.message()

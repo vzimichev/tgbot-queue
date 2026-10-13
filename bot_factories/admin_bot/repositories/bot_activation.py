@@ -67,6 +67,18 @@ class ManagedBotActivationService:
             return bot
         return self.prepare_activation(bot_id)
 
+    def recover_card_activation(self, bot: ManagedBotRow) -> ManagedBotRow:
+        """Ensure a bot card has activation details when it can be recovered."""
+        if bot.status == ManagedBotStatus.ACTIVE or bot.telegram_bot_id is None:
+            return bot
+        if (
+            bot.status == ManagedBotStatus.AWAITING_ACTIVATION
+            and bot.claim_token
+            and bot.child_bot_token
+        ):
+            return bot
+        return self.recover_activation(bot.id)
+
     @staticmethod
     def activation_link(bot: ManagedBotRow) -> str | None:
         if bot.telegram_bot_id is None or not bot.claim_token:
