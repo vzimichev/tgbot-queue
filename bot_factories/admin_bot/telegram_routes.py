@@ -369,13 +369,17 @@ async def _recipient_account_for_message(message: Message, managed_bot_id: int):
         await message.answer("This personal bot is available only to its recipient.")
         return None
     if account.result == ManagedBotAccountResult.INACTIVE:
-        await message.answer("Access has not been activated yet. Use your activation link.")
+        await message.answer(
+            "Access has not been activated yet. Use your activation link."
+        )
         return None
     return account
 
 
 @managed_bot_router.message(Command("balance"))
-async def show_managed_bot_balance(message: Message, managed_bot_id: int) -> dict[str, str]:
+async def show_managed_bot_balance(
+    message: Message, managed_bot_id: int
+) -> dict[str, str]:
     """Show the recipient the remaining video-time allowance."""
     account = await _recipient_account_for_message(message, managed_bot_id)
     if account is None:

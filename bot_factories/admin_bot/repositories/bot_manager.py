@@ -205,7 +205,5 @@ class ManagedBotsRepository:
             return None
         return replace(
             bot,
-            remaining_seconds=ManagedBotTransactionsCrud(connection).balance(
-                bot.id
-            ),
+            remaining_seconds=ManagedBotTransactionsCrud(connection).balance(bot.id),
         )

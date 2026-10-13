@@ -58,23 +58,6 @@ def initialize(connection: sqlite3.Connection) -> None:
         )
         """
     )
-    transaction_columns = {
-        row[1]
-        for row in connection.execute(
-            "PRAGMA table_info(managed_bot_transactions)"
-        )
-    }
-    if "created_at" not in transaction_columns:
-        connection.execute(
-            "ALTER TABLE managed_bot_transactions ADD COLUMN created_at TEXT"
-        )
-        connection.execute(
-            """
-            UPDATE managed_bot_transactions
-            SET created_at = CURRENT_TIMESTAMP
-            WHERE created_at IS NULL
-            """
-        )
     connection.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS managed_bot_transactions_video_update_idx

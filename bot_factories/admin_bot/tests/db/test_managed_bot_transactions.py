@@ -20,9 +20,7 @@ def test_transaction_crud_records_and_calculates_a_balance():
     transactions = ManagedBotTransactionsCrud(connection)
 
     opening = transactions.add(1, 60, TransactionType.OPENING_BALANCE)
-    debit = transactions.add(
-        1, -12, TransactionType.VIDEO_DEBIT, webhook_update_id=101
-    )
+    debit = transactions.add(1, -12, TransactionType.VIDEO_DEBIT, webhook_update_id=101)
 
     assert transactions.balance(1) == 48
     assert transactions.has_video_debit(1, 101)
