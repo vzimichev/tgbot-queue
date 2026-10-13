@@ -2,20 +2,23 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-import pytest
-
-from bot_factories.admin_bot import telegram_routes as routes
+from bot_factories.admin_bot.routes import admin_bot as admin_routes
+from bot_factories.admin_bot.routes import managed_bot as routes
 from bot_factories.admin_bot.db.managed_bots import ActivationResult, ManagedBotStatus
+from bot_factories.admin_bot.repositories.managed_bot_transactions import (
+    ManagedBotVideoCharge,
+    ManagedBotVideoChargeResult,
+)
 
 
 def test_parse_seconds_accepts_only_positive_ascii_integers():
-    assert routes._parse_seconds(" 10 ") == 10
+    assert admin_routes._parse_seconds(" 10 ") == 10
     for value in (None, "", "0", "-1", "1.5", "²"):
-        assert routes._parse_seconds(value) is None
+        assert admin_routes._parse_seconds(value) is None
 
 
 def test_is_owner_rejects_groups_and_other_users(monkeypatch):
-    monkeypatch.setattr(routes.admin_bot_settings, "owner_id", 7)
+    monkeypatch.setattr(admin_routes.admin_bot_settings, "owner_id", 7)
 
     def event(user_id, chat_id):
         return SimpleNamespace(
@@ -23,24 +26,9 @@ def test_is_owner_rejects_groups_and_other_users(monkeypatch):
             message=SimpleNamespace(chat=SimpleNamespace(id=chat_id)),
         )
 
-    assert routes.is_owner(event(7, 7))
-    assert not routes.is_owner(event(8, 8))
-    assert not routes.is_owner(event(7, -7))
-
-
-def test_recover_card_activation_skips_active_and_complete_records(monkeypatch, managed_bot):
-    recovered = Mock()
-    monkeypatch.setattr(routes.activation_service, "recover_activation", recovered)
-
-    active = managed_bot(status=ManagedBotStatus.ACTIVE)
-    ready = managed_bot(child_bot_token="child", claim_token="claim")
-    failed = managed_bot(status=ManagedBotStatus.ERROR)
-    recovered.return_value = ready
-
-    assert asyncio.run(routes.recover_card_activation(active)) == active
-    assert asyncio.run(routes.recover_card_activation(ready)) == ready
-    assert asyncio.run(routes.recover_card_activation(failed)) == ready
-    recovered.assert_called_once_with(failed.id)
+    assert admin_routes.is_owner(event(7, 7))
+    assert not admin_routes.is_owner(event(8, 8))
+    assert not admin_routes.is_owner(event(7, -7))
 
 
 def test_managed_message_returns_status_and_only_sends_known_responses(monkeypatch):
@@ -62,24 +50,108 @@ def test_managed_message_returns_status_and_only_sends_known_responses(monkeypat
 def test_managed_message_without_sender_is_ignored():
     message = SimpleNamespace(from_user=None)
 
-    assert asyncio.run(routes.process_managed_bot_message(message, 99, 12)) == {"status": "ignored"}
+    assert asyncio.run(routes.process_managed_bot_message(message, 99, 12)) == {
+        "status": "ignored"
+    }
 
 
-def test_register_managed_bot_only_accepts_owner_and_prepares_record(monkeypatch, managed_bot):
+def test_active_managed_bot_charges_the_sent_video(monkeypatch, managed_bot):
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=7),
+        video=SimpleNamespace(duration=12),
+        answer=AsyncMock(),
+    )
+    bot = managed_bot(status=ManagedBotStatus.ACTIVE, remaining_seconds=48)
+    monkeypatch.setattr(
+        routes.managed_bots_repository, "get_by_telegram_bot_id", Mock(return_value=bot)
+    )
+    charge_video = Mock(
+        return_value=ManagedBotVideoCharge(ManagedBotVideoChargeResult.CONSUMED, 48)
+    )
+    monkeypatch.setattr(
+        routes.managed_bot_transactions_repository, "charge_video", charge_video
+    )
+
+    assert asyncio.run(routes.process_managed_bot_message(message, 99, 12)) == {
+        "status": "consumed"
+    }
+    charge_video.assert_called_once_with(99, 7, 12, 12)
+    message.answer.assert_awaited_once()
+
+
+def test_managed_bot_balance_command_shows_the_recipient_balance(monkeypatch):
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=7),
+        answer=AsyncMock(),
+    )
+    account = SimpleNamespace(
+        result=routes.ManagedBotAccountResult.AVAILABLE,
+        remaining_seconds=48,
+    )
+    get_account = Mock(return_value=account)
+    monkeypatch.setattr(
+        routes.managed_bots_repository, "get_managed_bot_account", get_account
+    )
+
+    assert asyncio.run(routes.show_managed_bot_balance(message, 99)) == {
+        "status": "balance"
+    }
+    get_account.assert_called_once_with(99, 7)
+    message.answer.assert_awaited_once_with("Remaining limit: 48 seconds.")
+
+
+def test_managed_bot_transactions_command_lists_ledger_entries(monkeypatch):
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=7),
+        answer=AsyncMock(),
+    )
+    transaction = SimpleNamespace(
+        created_at=__import__("datetime").datetime(2026, 10, 12, 10, 30),
+        transaction_type=routes.TransactionType.TOP_UP,
+        seconds=60,
+    )
+    account = SimpleNamespace(
+        result=routes.ManagedBotAccountResult.AVAILABLE,
+        remaining_seconds=108,
+        transactions=(transaction,),
+    )
+    monkeypatch.setattr(
+        routes.managed_bots_repository,
+        "get_managed_bot_account",
+        Mock(return_value=account),
+    )
+
+    assert asyncio.run(routes.show_managed_bot_transactions(message, 99)) == {
+        "status": "transactions"
+    }
+    assert "Limit added: +60 seconds" in message.answer.await_args.args[0]
+
+
+def test_register_managed_bot_only_accepts_owner_and_prepares_record(
+    monkeypatch, managed_bot
+):
     record = managed_bot(telegram_bot_id=99)
     register = Mock(return_value=record)
     prepare = Mock(return_value=record)
-    monkeypatch.setattr(routes.admin_bot_settings, "owner_id", 7)
-    monkeypatch.setattr(routes.managed_bots_repository, "register_created_bot", register)
-    monkeypatch.setattr(routes.activation_service, "prepare_activation", prepare)
+    monkeypatch.setattr(admin_routes.admin_bot_settings, "owner_id", 7)
+    monkeypatch.setattr(
+        admin_routes.managed_bots_repository, "register_created_bot", register
+    )
+    monkeypatch.setattr(admin_routes.activation_service, "prepare_activation", prepare)
     bot = SimpleNamespace(send_message=AsyncMock())
 
-    foreign = SimpleNamespace(user=SimpleNamespace(id=8), bot_user=SimpleNamespace(id=99, username="personal_bot", first_name="Personal"))
-    asyncio.run(routes.register_managed_bot(foreign, bot))
+    foreign = SimpleNamespace(
+        user=SimpleNamespace(id=8),
+        bot_user=SimpleNamespace(id=99, username="personal_bot", first_name="Personal"),
+    )
+    asyncio.run(admin_routes.register_managed_bot(foreign, bot))
     register.assert_not_called()
 
-    event = SimpleNamespace(user=SimpleNamespace(id=7), bot_user=SimpleNamespace(id=99, username="personal_bot", first_name="Personal"))
-    asyncio.run(routes.register_managed_bot(event, bot))
+    event = SimpleNamespace(
+        user=SimpleNamespace(id=7),
+        bot_user=SimpleNamespace(id=99, username="personal_bot", first_name="Personal"),
+    )
+    asyncio.run(admin_routes.register_managed_bot(event, bot))
     register.assert_called_once_with(99, "personal_bot", "Personal")
     prepare.assert_called_once_with(record.id)
     bot.send_message.assert_awaited_once()

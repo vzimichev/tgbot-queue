@@ -17,7 +17,16 @@ def test_managed_bot_updates_dispatches_valid_update_and_closes_session(monkeypa
     monkeypatch.setattr(tasks, "managed_bot_token", Mock(return_value="123:child"))
     monkeypatch.setattr(tasks, "Bot", Mock(return_value=bot))
     monkeypatch.setattr(tasks.managed_bot_dispatcher, "feed_update", feed)
-    body = {"update_id": 12, "message": {"message_id": 1, "date": 0, "chat": {"id": 1, "type": "private"}, "from": {"id": 1, "is_bot": False, "first_name": "A"}, "text": "/start"}}
+    body = {
+        "update_id": 12,
+        "message": {
+            "message_id": 1,
+            "date": 0,
+            "chat": {"id": 1, "type": "private"},
+            "from": {"id": 1, "is_bot": False, "first_name": "A"},
+            "text": "/start",
+        },
+    }
 
     assert tasks.managed_bot_updates.run(99, body) == {"status": "configured"}
     assert feed.await_args.kwargs["managed_bot_id"] == 99

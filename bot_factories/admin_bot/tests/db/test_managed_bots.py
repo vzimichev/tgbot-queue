@@ -63,4 +63,9 @@ def test_initialize_upgrades_legacy_table_with_activation_columns():
     initialize(connection)
 
     columns = {row[1] for row in connection.execute("PRAGMA table_info(managed_bots)")}
-    assert {"child_bot_token", "claim_token", "access_mode", "activation_error"} <= columns
+    assert {
+        "child_bot_token",
+        "claim_token",
+        "access_mode",
+        "activation_error",
+    } <= columns

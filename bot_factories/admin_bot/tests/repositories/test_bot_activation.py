@@ -27,13 +27,16 @@ class Repository:
 
 
 class TelegramApi:
-    def __init__(self, settings=None, error=None, restrict_error=None):
+    def __init__(
+        self, settings=None, error=None, restrict_error=None, commands_error=None
+    ):
         self.settings = settings or {
             "is_access_restricted": True,
             "added_users": [{"id": 42}],
         }
         self.error = error
         self.restrict_error = restrict_error
+        self.commands_error = commands_error
         self.calls = []
 
     def get_managed_bot_token(self, _):
@@ -41,6 +44,11 @@ class TelegramApi:
 
     def configure_child_webhook(self, *_):
         self.calls.append("webhook")
+
+    def configure_child_commands(self, *_):
+        self.calls.append("commands")
+        if self.commands_error:
+            raise RuntimeError(self.commands_error)
 
     def set_access_open(self, *_):
         self.calls.append("open")
@@ -82,6 +90,7 @@ def test_prepare_activation_creates_link_state():
     assert prepared.child_bot_token == "child-token"
     assert prepared.claim_token
     assert prepared.status == ManagedBotStatus.AWAITING_ACTIVATION
+    assert service.telegram_api.calls == ["webhook", "commands", "open"]
     assert service.activation_link(prepared).endswith(prepared.claim_token)
 
 
@@ -201,6 +210,36 @@ def test_active_bot_is_not_reconfigured_during_recovery():
 
     assert recovered == repo.bot
     assert api.calls == []
+
+
+def test_card_recovery_syncs_commands_for_ready_bots_and_recovers_failed_ones():
+    ready = bot(child_bot_token="child", claim_token="claim")
+    ready_api = TelegramApi()
+    ready_service = ManagedBotActivationService(Repository(ready), ready_api)
+
+    assert ready_service.recover_card_activation(ready) == ready
+    assert ready_api.calls == ["commands"]
+
+    failed = bot(status=ManagedBotStatus.ERROR)
+    failed_api = TelegramApi()
+    failed_service = ManagedBotActivationService(Repository(failed), failed_api)
+
+    recovered = failed_service.recover_card_activation(failed)
+    assert recovered.status == ManagedBotStatus.AWAITING_ACTIVATION
+    assert failed_api.calls == ["webhook", "commands", "open"]
+
+
+def test_card_recovery_marks_bot_error_when_command_sync_fails():
+    repo = Repository(bot(child_bot_token="child", claim_token="claim"))
+    service = ManagedBotActivationService(
+        repo, TelegramApi(commands_error="request failed for 123456:child-token")
+    )
+
+    recovered = service.recover_card_activation(repo.bot)
+
+    assert recovered.status == ManagedBotStatus.ERROR
+    assert "123456:child-token" not in recovered.activation_error
+    assert "[redacted]" in recovered.activation_error
 
 
 def test_duplicate_claim_update_does_not_change_activation():

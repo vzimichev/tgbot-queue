@@ -48,6 +48,19 @@ def configure_managed_bot_webhook(
     )
 
 
+def configure_managed_bot_commands(bot_token: str) -> None:
+    if not bot_token:
+        raise ValueError("bot_token is required")
+    _call(
+        bot_token,
+        "setMyCommands",
+        commands=[
+            {"command": "balance", "description": "Show remaining limit"},
+            {"command": "transactions", "description": "Show recent transactions"},
+        ],
+    )
+
+
 class ManagedBotTelegramApi:
     """Telegram calls used by the managed-bot activation lifecycle."""
 
@@ -58,6 +71,9 @@ class ManagedBotTelegramApi:
         self, child_bot_token: str, telegram_bot_id: int
     ) -> None:
         configure_managed_bot_webhook(child_bot_token, telegram_bot_id)
+
+    def configure_child_commands(self, child_bot_token: str) -> None:
+        configure_managed_bot_commands(child_bot_token)
 
     def set_access_open(self, telegram_bot_id: int) -> None:
         _call(

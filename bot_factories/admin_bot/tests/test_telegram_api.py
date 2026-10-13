@@ -24,7 +24,9 @@ def test_get_managed_bot_token_validates_input_and_response(monkeypatch):
 
 
 def test_webhook_configuration_uses_child_secret(monkeypatch):
-    monkeypatch.setattr(telegram_api.admin_bot_settings, "child_webhook_url", "https://host/hook/")
+    monkeypatch.setattr(
+        telegram_api.admin_bot_settings, "child_webhook_url", "https://host/hook/"
+    )
     monkeypatch.setattr(telegram_api.settings, "webhook_secret_token", "gateway")
     call = Mock(return_value=True)
     monkeypatch.setattr(telegram_api, "_call", call)
@@ -36,11 +38,28 @@ def test_webhook_configuration_uses_child_secret(monkeypatch):
     assert call.call_args.kwargs["allowed_updates"] == ["message"]
 
 
+def test_commands_configuration_uses_child_token(monkeypatch):
+    call = Mock(return_value=True)
+    monkeypatch.setattr(telegram_api, "_call", call)
+
+    telegram_api.configure_managed_bot_commands("child")
+
+    assert call.call_args.args == ("child", "setMyCommands")
+    assert call.call_args.kwargs["commands"] == [
+        {"command": "balance", "description": "Show remaining limit"},
+        {"command": "transactions", "description": "Show recent transactions"},
+    ]
+
+
 def test_api_errors_redact_token_and_urls(monkeypatch):
     monkeypatch.setattr(
         telegram_api.httpx,
         "post",
-        Mock(return_value=response(ok=False, status_code=400, description="bad secret https://host/?x=1")),
+        Mock(
+            return_value=response(
+                ok=False, status_code=400, description="bad secret https://host/?x=1"
+            )
+        ),
     )
 
     with pytest.raises(RuntimeError) as caught:
@@ -52,7 +71,9 @@ def test_api_errors_redact_token_and_urls(monkeypatch):
 
 
 def test_network_errors_are_wrapped(monkeypatch):
-    monkeypatch.setattr(telegram_api.httpx, "post", Mock(side_effect=httpx.ConnectError("no")))
+    monkeypatch.setattr(
+        telegram_api.httpx, "post", Mock(side_effect=httpx.ConnectError("no"))
+    )
 
     with pytest.raises(RuntimeError, match="method"):
         telegram_api._call("token", "method")
