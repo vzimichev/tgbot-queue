@@ -38,6 +38,19 @@ def test_webhook_configuration_uses_child_secret(monkeypatch):
     assert call.call_args.kwargs["allowed_updates"] == ["message"]
 
 
+def test_commands_configuration_uses_child_token(monkeypatch):
+    call = Mock(return_value=True)
+    monkeypatch.setattr(telegram_api, "_call", call)
+
+    telegram_api.configure_managed_bot_commands("child")
+
+    assert call.call_args.args == ("child", "setMyCommands")
+    assert call.call_args.kwargs["commands"] == [
+        {"command": "balance", "description": "Show remaining limit"},
+        {"command": "transactions", "description": "Show recent transactions"},
+    ]
+
+
 def test_api_errors_redact_token_and_urls(monkeypatch):
     monkeypatch.setattr(
         telegram_api.httpx,

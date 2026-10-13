@@ -38,6 +38,7 @@ class ManagedBotActivationService:
             if not token:
                 token = self.telegram_api.get_managed_bot_token(bot.telegram_bot_id)
             self.telegram_api.configure_child_webhook(token, bot.telegram_bot_id)
+            self.telegram_api.configure_child_commands(token)
             self.telegram_api.set_access_open(bot.telegram_bot_id)
         except RuntimeError as error:
             return self.repository.save(
@@ -69,17 +70,37 @@ class ManagedBotActivationService:
 
     def recover_card_activation(self, bot: ManagedBotRow) -> ManagedBotRow:
         """Ensure a bot card has activation details when it can be recovered."""
-        if bot.status == ManagedBotStatus.ACTIVE:
-            return bot
         if bot.telegram_bot_id is None:
             return bot
+        if bot.status == ManagedBotStatus.ACTIVE:
+            return self._sync_commands(bot)
         if (
             bot.status == ManagedBotStatus.AWAITING_ACTIVATION
             and bot.claim_token
             and bot.child_bot_token
         ):
-            return bot
+            return self._sync_commands(bot)
         return self.recover_activation(bot.id)
+
+    def _sync_commands(self, bot: ManagedBotRow) -> ManagedBotRow:
+        assert bot.telegram_bot_id is not None
+        token = bot.child_bot_token
+        try:
+            if not token:
+                token = self.telegram_api.get_managed_bot_token(bot.telegram_bot_id)
+            self.telegram_api.configure_child_commands(token)
+        except RuntimeError as error:
+            return self.repository.save(
+                replace(
+                    bot,
+                    child_bot_token=token,
+                    status=ManagedBotStatus.ERROR,
+                    activation_error=_sanitize_error(str(error)),
+                )
+            )
+        if token != bot.child_bot_token:
+            return self.repository.save(replace(bot, child_bot_token=token))
+        return bot
 
     @staticmethod
     def activation_link(bot: ManagedBotRow) -> str | None:
