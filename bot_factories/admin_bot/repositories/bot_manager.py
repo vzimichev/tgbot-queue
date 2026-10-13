@@ -40,7 +40,8 @@ class ManagedBotsRepository:
         connection: sqlite3.Connection,
     ) -> ManagedBotRow | None:
         return self._with_balance(
-            ManagedBotsCrud(connection).get_by_recipient_id(recipient_id), connection
+            ManagedBotsCrud(connection).get_by_recipient_id(recipient_id),
+            ManagedBotTransactionsCrud(connection),
         )
 
     @transactional
@@ -52,7 +53,7 @@ class ManagedBotsRepository:
     ) -> ManagedBotRow | None:
         return self._with_balance(
             ManagedBotsCrud(connection).get_by_telegram_bot_id(telegram_bot_id),
-            connection,
+            ManagedBotTransactionsCrud(connection),
         )
 
     @transactional
@@ -63,7 +64,8 @@ class ManagedBotsRepository:
         connection: sqlite3.Connection,
     ) -> ManagedBotRow | None:
         return self._with_balance(
-            ManagedBotsCrud(connection).get_by_id(bot_id), connection
+            ManagedBotsCrud(connection).get_by_id(bot_id),
+            ManagedBotTransactionsCrud(connection),
         )
 
     @transactional
@@ -94,8 +96,9 @@ class ManagedBotsRepository:
         *,
         connection: sqlite3.Connection,
     ) -> list[ManagedBotRow]:
+        transactions = ManagedBotTransactionsCrud(connection)
         return [
-            self._with_balance(bot, connection)
+            self._with_balance(bot, transactions)
             for bot in ManagedBotsCrud(connection).list_all()
         ]
 
@@ -137,7 +140,7 @@ class ManagedBotsRepository:
                 ManagedBotTransactionsCrud(connection).add(
                     bot.id, initial_seconds, "opening_balance"
                 )
-                return self._with_balance(bot, connection)
+                return self._with_balance(bot, ManagedBotTransactionsCrud(connection))
 
         raise RuntimeError("Could not generate a unique bot username")
 
@@ -173,7 +176,7 @@ class ManagedBotsRepository:
         )
         with transaction() as connection:
             saved = ManagedBotsCrud(connection).update(registered_bot)
-            return self._with_balance(saved, connection)
+            return self._with_balance(saved, ManagedBotTransactionsCrud(connection))
 
     @transactional
     def save(
@@ -189,7 +192,7 @@ class ManagedBotsRepository:
         # The legacy column is no longer a balance cache.  Preserve it while
         # saving lifecycle fields, because the transaction ledger is canonical.
         saved = crud.update(replace(bot, remaining_seconds=persisted.remaining_seconds))
-        return self._with_balance(saved, connection)
+        return self._with_balance(saved, ManagedBotTransactionsCrud(connection))
 
     def get_invitation(self, bot_id: int) -> str:
         bot = self.get_bot(bot_id)
@@ -199,11 +202,11 @@ class ManagedBotsRepository:
 
     @staticmethod
     def _with_balance(
-        bot: ManagedBotRow | None, connection: sqlite3.Connection
+        bot: ManagedBotRow | None, transactions: ManagedBotTransactionsCrud
     ) -> ManagedBotRow | None:
         if bot is None:
             return None
         return replace(
             bot,
-            remaining_seconds=ManagedBotTransactionsCrud(connection).balance(bot.id),
+            remaining_seconds=transactions.balance(bot.id),
         )
