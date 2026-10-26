@@ -148,8 +148,8 @@ not spend the limit twice.
 ### AWS migration (EC2 + CloudFormation)
 
 The AWS stack in `deploy/aws/gateway-stack.yaml` provisions an isolated VPC,
-public subnet, security group, Ubuntu 26.04 x86_64 `t3.micro` gateway, 1 GB
-swap, and a stable Elastic IP in `eu-central-1`. It opens HTTP/HTTPS to the
+public subnet, security group, Ubuntu 26.04 x86_64 `t3.micro` Docker host, 1
+GB swap, and a stable Elastic IP in `eu-central-1`. It opens HTTP/HTTPS to the
 internet and SSH only from `AllowedSshCidr`. Redis is not exposed publicly.
 It does not accept, generate, or store application secrets.
 
@@ -188,19 +188,35 @@ finish, then connect using the `ubuntu` user. The stack's first-boot setup
 installs basic tools, enables a 1 GB swap file, disables password and keyboard
 interactive SSH, and enables UFW for ports 22, 80, and 443.
 
-For a quick move from DigitalOcean, do not change DuckDNS or Telegram yet.
-Create `/root/gateway.env` on the new instance using a new Redis password and
-webhook secret (keep this file private), then install the gateway:
+The existing DigitalOcean server runs the Docker gateway and a separate
+`admin-bot-worker`; its `admin-bot_admin_data` volume contains the admin
+SQLite database and must be migrated. Redis data is only the Celery queue and
+is intentionally not migrated in this fast-cutover procedure.
+
+Before DNS cutover, pause the old admin worker long enough to create a
+consistent backup, then start it again. Run this on the current server:
 
 ```bash
-sudo install -m 600 /dev/null /root/gateway.env
-sudoedit /root/gateway.env
-
-curl -fsSLo bootstrap.sh https://raw.githubusercontent.com/vzimichev/tgbot-queue/codex/cloud-gateway-deploy/deploy/cloud/bootstrap.sh
-sudo bash bootstrap.sh your-domain.duckdns.org /root/gateway.env
+cd /opt/tgbot-queue
+docker compose -f bot_factories/admin_bot/docker-compose.yml stop worker
+docker run --rm \
+  -v admin-bot_admin_data:/source:ro \
+  -v /root:/backup \
+  alpine tar czf /backup/admin-bot-data.tgz -C /source .
+docker compose -f bot_factories/admin_bot/docker-compose.yml start worker
 ```
 
-Use this file format:
+On the new EC2 instance, clone the repository and create its private gateway
+environment file. This uses the Docker deployment so it matches the current
+server topology:
+
+```bash
+sudo git clone --branch main https://github.com/vzimichev/tgbot-queue.git /opt/tgbot-queue
+sudo install -m 600 /dev/null /opt/tgbot-queue/.env
+sudoedit /opt/tgbot-queue/.env
+```
+
+Use this file format, with new values:
 
 ```env
 WEBHOOK_SECRET_TOKEN=replace-with-a-new-random-secret
@@ -209,18 +225,48 @@ REDIS_PORT=6379
 REDIS_PASSWORD=replace-with-a-new-random-password
 ```
 
-To obtain the first certificate, DuckDNS must temporarily resolve the domain to
-the new Elastic IP. At cutover, point DuckDNS at that IP, verify
-`https://your-domain.duckdns.org/openapi.json`, update the Telegram webhook,
-and replace `SSH_HOST` in every local bot-specific `.env` with
-`ubuntu@your-domain.duckdns.org`. Copy the new `REDIS_PASSWORD` to every
-bot-specific `.env` as well. If the admin bot is in use, also copy the new
-`WEBHOOK_SECRET_TOKEN` and change `ADMIN_BOT_CHILD_WEBHOOK_URL` to the new
-domain. Configure the same webhook secret in Telegram's `setWebhook` call.
-Then restart each local worker so its SSH tunnel uses the new host. The chosen
-fast cutover allows tasks still queued in the old DigitalOcean Redis to be
-lost. Keep the old server until a test update succeeds through every active
-worker; only then delete the Droplet.
+Copy the admin configuration and volume archive through the administrator
+machine without keeping a local plaintext copy. Replace both placeholders with
+the real hosts or IP addresses:
+
+```bash
+scp -3 root@OLD_SERVER:/root/admin-bot-data.tgz ubuntu@NEW_SERVER:/tmp/
+scp -3 root@OLD_SERVER:/opt/tgbot-queue/bot_factories/admin_bot/.env \
+  ubuntu@NEW_SERVER:/tmp/admin-bot.env
+```
+
+On the new host, install the admin configuration, change its
+`REDIS_PASSWORD`, `WEBHOOK_SECRET_TOKEN`, and `ADMIN_BOT_CHILD_WEBHOOK_URL` to
+the new values, then restore the volume before starting the admin worker:
+
+```bash
+sudo install -m 600 /tmp/admin-bot.env /opt/tgbot-queue/bot_factories/admin_bot/.env
+sudoedit /opt/tgbot-queue/bot_factories/admin_bot/.env
+sudo docker volume create admin-bot_admin_data
+sudo docker run --rm \
+  -v admin-bot_admin_data:/target \
+  -v /tmp:/backup:ro \
+  alpine tar xzf /backup/admin-bot-data.tgz -C /target
+rm /tmp/admin-bot.env /tmp/admin-bot-data.tgz
+```
+
+At cutover, point DuckDNS at the Elastic IP. Once it resolves to the new host,
+start the gateway and obtain its certificate:
+
+```bash
+cd /opt/tgbot-queue
+sudo bash deploy/docker/install.sh your-domain.duckdns.org
+sudo docker compose -f bot_factories/admin_bot/docker-compose.yml up -d worker
+```
+
+Verify `https://your-domain.duckdns.org/openapi.json`, update the Telegram
+webhook with the new secret, and replace `SSH_HOST` in every local
+bot-specific `.env` with `ubuntu@your-domain.duckdns.org`. Copy the new
+`REDIS_PASSWORD` to each bot-specific `.env`; then restart every local worker
+so its SSH tunnel uses the new host. The fast cutover allows tasks still queued
+in the old Redis volume to be lost. Keep the old server until test updates
+succeed through the gateway and every active worker; only then delete the
+Droplet.
 
 ### Without Docker (Debian 13 or Ubuntu)
 
