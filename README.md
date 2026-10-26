@@ -143,6 +143,16 @@ seconds) of each video sent to it. A video is accepted only when its full
 duration fits in the remaining limit; retried Telegram webhook deliveries do
 not spend the limit twice.
 
+Personal bots also provide `/faceswap`. It asks the recipient for one photo and
+one video, validates and charges the request in the Telegram-update worker, and
+then publishes `managed_faceswap.process` to the separate Celery queue
+`faceswap_jobs`. It is consumed beside the local GPU and FaceFusion API with
+`./bot_factories/admin_bot/start_faceswap_worker.sh`. The script opens the Redis
+SSH tunnel and consumes only `faceswap_jobs`; it does not need the managed
+worker's SQLite database. The queued task includes the managed child-bot token
+so the local worker can download media and return the result directly; therefore
+the Redis broker must remain private (the supplied SSH tunnel does this).
+
 ## Running the Cloud Gateway
 
 ### Without Docker (Debian 13 or Ubuntu)

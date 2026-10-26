@@ -55,6 +55,7 @@ def configure_managed_bot_commands(bot_token: str) -> None:
         bot_token,
         "setMyCommands",
         commands=[
+            {"command": "faceswap", "description": "Swap a face in a video"},
             {"command": "balance", "description": "Show remaining limit"},
             {"command": "transactions", "description": "Show recent transactions"},
         ],

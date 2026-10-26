@@ -100,6 +100,117 @@ def test_managed_bot_balance_command_shows_the_recipient_balance(monkeypatch):
     message.answer.assert_awaited_once_with("Remaining limit: 48 seconds.")
 
 
+def test_faceswap_command_checks_access_and_starts_media_flow(monkeypatch):
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=7),
+        answer=AsyncMock(),
+    )
+    state = SimpleNamespace(clear=AsyncMock(), set_state=AsyncMock())
+    account = SimpleNamespace(result=routes.ManagedBotAccountResult.AVAILABLE)
+    monkeypatch.setattr(
+        routes.managed_bots_repository,
+        "get_managed_bot_account",
+        Mock(return_value=account),
+    )
+
+    assert asyncio.run(routes.begin_managed_faceswap(message, state, 99)) == {
+        "status": "awaiting_media"
+    }
+    state.clear.assert_awaited_once()
+    state.set_state.assert_awaited_once_with(
+        routes.ManagedFaceSwapFlow.WAITING_FOR_MEDIA
+    )
+    assert "one photo and one video" in message.answer.await_args.args[0]
+
+
+def test_faceswap_photo_waits_for_video_without_charging(monkeypatch):
+    stored = {}
+
+    async def update_data(**values):
+        stored.update(values)
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=7),
+        bot=SimpleNamespace(token="123:child"),
+        chat=SimpleNamespace(id=7),
+        photo=[SimpleNamespace(file_id="photo-id", file_unique_id="photo")],
+        video=None,
+        document=None,
+        media_group_id=None,
+        answer=AsyncMock(),
+    )
+    state = SimpleNamespace(
+        clear=AsyncMock(),
+        get_data=AsyncMock(side_effect=lambda: stored.copy()),
+        update_data=update_data,
+    )
+    account = SimpleNamespace(result=routes.ManagedBotAccountResult.AVAILABLE)
+    monkeypatch.setattr(
+        routes.managed_bots_repository,
+        "get_managed_bot_account",
+        Mock(return_value=account),
+    )
+    charge_video = Mock()
+    monkeypatch.setattr(
+        routes.managed_bot_transactions_repository, "charge_video", charge_video
+    )
+
+    assert asyncio.run(
+        routes.receive_managed_faceswap_media(message, state, 99, 12)
+    ) == {"status": "awaiting_media"}
+    assert stored["photo_file_id"] == "photo-id"
+    charge_video.assert_not_called()
+
+
+def test_faceswap_charges_duration_of_video_received_before_photo(monkeypatch):
+    stored = {
+        "video_file_id": "video-id",
+        "video_file_name": "target.mp4",
+        "video_duration": 12,
+    }
+
+    async def update_data(**values):
+        stored.update(values)
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=7),
+        bot=SimpleNamespace(token="123:child"),
+        chat=SimpleNamespace(id=7),
+        photo=[SimpleNamespace(file_id="photo-id", file_unique_id="photo")],
+        video=None,
+        document=None,
+        media_group_id=None,
+        answer=AsyncMock(),
+    )
+    state = SimpleNamespace(
+        clear=AsyncMock(),
+        get_data=AsyncMock(side_effect=lambda: stored.copy()),
+        update_data=update_data,
+    )
+    account = SimpleNamespace(result=routes.ManagedBotAccountResult.AVAILABLE)
+    monkeypatch.setattr(
+        routes.managed_bots_repository,
+        "get_managed_bot_account",
+        Mock(return_value=account),
+    )
+    charge_video = Mock(
+        return_value=ManagedBotVideoCharge(ManagedBotVideoChargeResult.CONSUMED, 36)
+    )
+    monkeypatch.setattr(
+        routes.managed_bot_transactions_repository, "charge_video", charge_video
+    )
+    enqueue = Mock()
+    monkeypatch.setattr(routes.current_app, "send_task", enqueue)
+
+    assert asyncio.run(
+        routes.receive_managed_faceswap_media(message, state, 99, 13)
+    ) == {"status": "queued"}
+    charge_video.assert_called_once_with(99, 7, 13, 12)
+    enqueue.assert_called_once()
+    assert enqueue.call_args.args[0] == "managed_faceswap.process"
+    assert enqueue.call_args.kwargs["queue"] == "faceswap_jobs"
+
+
 def test_managed_bot_transactions_command_lists_ledger_entries(monkeypatch):
     message = SimpleNamespace(
         from_user=SimpleNamespace(id=7),

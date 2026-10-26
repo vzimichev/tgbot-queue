@@ -46,6 +46,7 @@ def test_commands_configuration_uses_child_token(monkeypatch):
 
     assert call.call_args.args == ("child", "setMyCommands")
     assert call.call_args.kwargs["commands"] == [
+        {"command": "faceswap", "description": "Swap a face in a video"},
         {"command": "balance", "description": "Show remaining limit"},
         {"command": "transactions", "description": "Show recent transactions"},
     ]

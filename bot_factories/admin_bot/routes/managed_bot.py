@@ -1,9 +1,14 @@
 import asyncio
+import mimetypes
 
-from aiogram import Router
-from aiogram.filters import Command
+from aiogram import F, Router
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
+from celery import current_app
 
+from bot_factories.admin_bot.job_names import FACESWAP_QUEUE, MANAGED_FACESWAP_TASK
 from bot_factories.admin_bot.repositories.bot_manager import ManagedBotAccountResult
 from bot_factories.admin_bot.repositories.managed_bot_transactions import (
     ManagedBotVideoChargeResult,
@@ -16,6 +21,33 @@ from bot_factories.admin_bot.dependencies import (
 )
 
 managed_bot_router = Router()
+
+
+class ManagedFaceSwapFlow(StatesGroup):
+    WAITING_FOR_MEDIA = State()
+
+
+def extract_media(message: Message) -> tuple[str, str, str] | None:
+    """Return media kind, Telegram file id, and a safe fallback filename."""
+    if message.document:
+        document = message.document
+        mime_type = (
+            document.mime_type or mimetypes.guess_type(document.file_name or "")[0]
+        )
+        if mime_type and mime_type.startswith("image/"):
+            return "photo", document.file_id, document.file_name or "source.jpg"
+        return None
+    if message.photo:
+        photo = message.photo[-1]
+        return "photo", photo.file_id, f"source-{photo.file_unique_id}.jpg"
+    if message.video:
+        video = message.video
+        return (
+            "video",
+            video.file_id,
+            video.file_name or f"target-{video.file_unique_id}.mp4",
+        )
+    return None
 
 
 @managed_bot_router.message(Command("balance"))
@@ -55,6 +87,99 @@ async def show_managed_bot_transactions(
         f"Remaining limit: {account.remaining_seconds} seconds."
     )
     return {"status": "transactions"}
+
+
+@managed_bot_router.message(Command("faceswap"))
+async def begin_managed_faceswap(
+    message: Message, state: FSMContext, managed_bot_id: int
+) -> dict[str, str]:
+    """Start a FaceSwap request for the managed bot's recipient."""
+    account = await _recipient_account_for_message(message, managed_bot_id)
+    if account is None:
+        return {"status": "unavailable"}
+    await state.clear()
+    await state.set_state(ManagedFaceSwapFlow.WAITING_FOR_MEDIA)
+    await message.answer(
+        "Send one photo and one video (separately or in the same album). "
+        "The video duration will be deducted from your remaining limit."
+    )
+    return {"status": "awaiting_media"}
+
+
+@managed_bot_router.message(
+    StateFilter(ManagedFaceSwapFlow.WAITING_FOR_MEDIA), F.document | F.photo | F.video
+)
+async def receive_managed_faceswap_media(
+    message: Message, state: FSMContext, managed_bot_id: int, managed_update_id: int
+) -> dict[str, str]:
+    account = await _recipient_account_for_message(message, managed_bot_id)
+    if account is None:
+        await state.clear()
+        return {"status": "unavailable"}
+    media = extract_media(message)
+    if media is None:
+        await message.answer("The attachment must be an image or a video.")
+        return {"status": "unsupported_media"}
+
+    kind, file_id, file_name = media
+    data = await state.get_data()
+    media_group_id = message.media_group_id
+    if media_group_id and data.get("media_group_id") not in (None, media_group_id):
+        await state.clear()
+        data = {}
+    await state.update_data(
+        **{
+            "media_group_id": media_group_id or data.get("media_group_id"),
+            f"{kind}_file_id": file_id,
+            f"{kind}_file_name": file_name,
+            **(
+                {"video_duration": message.video.duration}
+                if kind == "video" and message.video
+                else {}
+            ),
+        }
+    )
+    data = await state.get_data()
+    if "photo_file_id" not in data or "video_file_id" not in data:
+        missing = "video" if kind == "photo" else "photo"
+        await message.answer(f"{kind.title()} received. Waiting for {missing}...")
+        return {"status": "awaiting_media"}
+
+    duration = int(data["video_duration"])
+    charge = await asyncio.to_thread(
+        managed_bot_transactions_repository.charge_video,
+        managed_bot_id,
+        message.from_user.id,
+        managed_update_id,
+        duration,
+    )
+    if charge.result == ManagedBotVideoChargeResult.INSUFFICIENT:
+        await message.answer(
+            f"This video is {duration} seconds, but only "
+            f"{charge.remaining_seconds} seconds remain. "
+            "Ask the administrator to add more time."
+        )
+        return {"status": charge.result.value}
+    if charge.result == ManagedBotVideoChargeResult.DUPLICATE:
+        return {"status": charge.result.value}
+    if charge.result != ManagedBotVideoChargeResult.CONSUMED:
+        await state.clear()
+        return {"status": charge.result.value}
+
+    current_app.send_task(
+        MANAGED_FACESWAP_TASK,
+        args=[message.bot.token, message.chat.id, data],
+        queue=FACESWAP_QUEUE,
+    )
+    await state.clear()
+    await message.answer("Face swap task queued.")
+    return {"status": "queued"}
+
+
+@managed_bot_router.message(StateFilter(ManagedFaceSwapFlow.WAITING_FOR_MEDIA))
+async def managed_faceswap_needs_media(message: Message) -> dict[str, str]:
+    await message.answer("Send a photo or video, or use /faceswap to restart.")
+    return {"status": "awaiting_media"}
 
 
 @managed_bot_router.message()
