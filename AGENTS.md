@@ -11,11 +11,13 @@ they become important for future changes.
 
 - Preserve unrelated user changes in the working tree.
 - Make the smallest change that solves the requested task.
-- Do not commit changes unless the user explicitly asks for a commit.
-- Do not push, create pull requests, or modify remote branches unless the user
-  explicitly asks for it.
-- When a commit is explicitly requested, use the commit naming convention
-  defined below.
+- Do not commit, push, create pull requests, or modify remote branches by
+  default.
+- Every commit, push, or pull request requires explicit permission in the
+  current user request. Permission applies only to the explicitly named
+  operation and never carries over to later requests or other changes.
+- When the user explicitly authorizes a commit, use the commit naming
+  convention defined below.
 - Do not use destructive commands such as resetting the repository, deleting
   volumes, or deleting databases unless the user explicitly requests it.
 - Before changing behavior, inspect the relevant code and existing tests.
@@ -35,15 +37,15 @@ Fix video debit idempotency (#25)
 Use an English imperative, start with a capital letter, avoid a trailing
 period, and add `(#number)` for an issue or pull request.
 
-Do not create a commit merely because the work is complete. Create one only
-after the user explicitly asks for it.
+Do not create a commit merely because the work is complete. A previous commit
+approval must never be reused for a later operation.
 
 ## Branch strategy
 
 Never work directly on `main`. Start every task from the current `main` in a
 focused branch named `codex/<short-topic>`.
 
-Flow: branch → implement → validate → review diff → commit/PR only on request.
+Flow: branch → implement → validate → review diff → ask before commit/PR.
 Keep one task per branch and do not mix unrelated changes.
 
 ## Project purpose
