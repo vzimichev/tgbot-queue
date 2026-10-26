@@ -1,0 +1,201 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Isolated EC2 host for the Telegram gateway. Application secrets are never
+  accepted by this stack; add them on the instance after it is provisioned.
+
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key pair allowed to SSH to the gateway host.
+  AllowedSshCidr:
+    Type: String
+    Description: CIDR permitted to SSH to the gateway (for example 203.0.113.10/32).
+    AllowedPattern: ^(?:[0-9]{1,3}\.){3}[0-9]{1,3}/(?:[0-9]|[12][0-9]|3[0-2])$
+    ConstraintDescription: Must be an IPv4 CIDR, such as 203.0.113.10/32.
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.micro
+    Description: x86_64 instance size matching the existing 1 vCPU / 1 GiB Droplet.
+  ProjectName:
+    Type: String
+    Default: tgbot-queue
+    AllowedPattern: ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$
+    Description: Value assigned to the Project tag on all stack resources.
+  GatewayDomain:
+    Type: String
+    Description: Fully qualified DuckDNS hostname that will point to the Elastic IP.
+    AllowedPattern: ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$
+    ConstraintDescription: Must be a hostname, such as example.duckdns.org.
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-vpc'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-igw'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref Vpc
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-public'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.42.0.0/24
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-public-a'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+
+  GatewaySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTPS webhook traffic and restricted SSH administration.
+      SecurityGroupIngress:
+        - Description: SSH administration
+          IpProtocol: tcp
+          CidrIp: !Ref AllowedSshCidr
+          FromPort: 22
+          ToPort: 22
+        - Description: HTTP for ACME validation and HTTPS redirects
+          IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+          FromPort: 80
+          ToPort: 80
+        - Description: HTTPS webhook traffic
+          IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+          FromPort: 443
+          ToPort: 443
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-gateway'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  GatewayInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: '{{resolve:ssm:/aws/service/canonical/ubuntu/server/26.04/stable/current/amd64/hvm/ebs-gp3/ami-id}}'
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref GatewaySecurityGroup
+      SubnetId: !Ref PublicSubnet
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            DeleteOnTermination: true
+            Encrypted: true
+            VolumeSize: 16
+            VolumeType: gp3
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-gateway'
+        - Key: Project
+          Value: !Ref ProjectName
+      UserData:
+        Fn::Base64: !Sub |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec > >(tee -a /var/log/tgbot-gateway-user-data.log) 2>&1
+
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y -qq ca-certificates curl git ufw
+
+          if ! swapon --show --noheadings | grep -q .; then
+            fallocate -l 1G /swapfile
+            chmod 600 /swapfile
+            mkswap /swapfile
+            swapon /swapfile
+            echo '/swapfile none swap sw 0 0' >> /etc/fstab
+          fi
+
+          install -d -m 0755 -o ubuntu -g ubuntu /opt/tgbot-gateway
+          cat > /etc/ssh/sshd_config.d/99-tgbot-gateway.conf <<'EOF'
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PermitRootLogin prohibit-password
+          EOF
+          systemctl reload ssh
+
+          ufw default deny incoming
+          ufw default allow outgoing
+          ufw allow 22/tcp
+          ufw allow 80/tcp
+          ufw allow 443/tcp
+          ufw --force enable
+
+  GatewayElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref GatewayInstance
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-gateway'
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  InstanceId:
+    Description: ID of the gateway EC2 instance.
+    Value: !Ref GatewayInstance
+  ElasticIp:
+    Description: Stable public IPv4 address to enter in DuckDNS.
+    Value: !Ref GatewayElasticIp
+  SshCommand:
+    Description: Command for the Ubuntu default user; replace the key-file path.
+    Value: !Sub 'ssh -i /path/to/${KeyName}.pem ubuntu@${GatewayElasticIp}'
+  GatewayUrl:
+    Description: Gateway base URL after DuckDNS points to the Elastic IP.
+    Value: !Sub 'https://${GatewayDomain}'

@@ -145,6 +145,83 @@ not spend the limit twice.
 
 ## Running the Cloud Gateway
 
+### AWS migration (EC2 + CloudFormation)
+
+The AWS stack in `deploy/aws/gateway-stack.yaml` provisions an isolated VPC,
+public subnet, security group, Ubuntu 26.04 x86_64 `t3.micro` gateway, 1 GB
+swap, and a stable Elastic IP in `eu-central-1`. It opens HTTP/HTTPS to the
+internet and SSH only from `AllowedSshCidr`. Redis is not exposed publicly.
+It does not accept, generate, or store application secrets.
+
+Before creating the stack, create an EC2 key pair in `eu-central-1` and learn
+the public IPv4 address of the computer that will administer and run the local
+workers. Use its `/32` CIDR (for example, `203.0.113.10/32`) for SSH access.
+Validate and create the stack from a machine authenticated to your AWS account:
+
+```bash
+aws cloudformation validate-template \
+  --region eu-central-1 \
+  --template-body file://deploy/aws/gateway-stack.yaml
+
+aws cloudformation create-stack \
+  --region eu-central-1 \
+  --stack-name tgbot-queue-gateway \
+  --template-body file://deploy/aws/gateway-stack.yaml \
+  --parameters \
+    ParameterKey=KeyName,ParameterValue=your-existing-key-pair \
+    ParameterKey=AllowedSshCidr,ParameterValue=203.0.113.10/32 \
+    ParameterKey=GatewayDomain,ParameterValue=your-domain.duckdns.org
+
+aws cloudformation wait stack-create-complete \
+  --region eu-central-1 \
+  --stack-name tgbot-queue-gateway
+
+aws cloudformation describe-stacks \
+  --region eu-central-1 \
+  --stack-name tgbot-queue-gateway \
+  --query 'Stacks[0].Outputs' \
+  --output table
+```
+
+The outputs contain the Elastic IP and SSH command. Wait for cloud-init to
+finish, then connect using the `ubuntu` user. The stack's first-boot setup
+installs basic tools, enables a 1 GB swap file, disables password and keyboard
+interactive SSH, and enables UFW for ports 22, 80, and 443.
+
+For a quick move from DigitalOcean, do not change DuckDNS or Telegram yet.
+Create `/root/gateway.env` on the new instance using a new Redis password and
+webhook secret (keep this file private), then install the gateway:
+
+```bash
+sudo install -m 600 /dev/null /root/gateway.env
+sudoedit /root/gateway.env
+
+curl -fsSLo bootstrap.sh https://raw.githubusercontent.com/vzimichev/tgbot-queue/codex/cloud-gateway-deploy/deploy/cloud/bootstrap.sh
+sudo bash bootstrap.sh your-domain.duckdns.org /root/gateway.env
+```
+
+Use this file format:
+
+```env
+WEBHOOK_SECRET_TOKEN=replace-with-a-new-random-secret
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+REDIS_PASSWORD=replace-with-a-new-random-password
+```
+
+To obtain the first certificate, DuckDNS must temporarily resolve the domain to
+the new Elastic IP. At cutover, point DuckDNS at that IP, verify
+`https://your-domain.duckdns.org/openapi.json`, update the Telegram webhook,
+and replace `SSH_HOST` in every local bot-specific `.env` with
+`ubuntu@your-domain.duckdns.org`. Copy the new `REDIS_PASSWORD` to every
+bot-specific `.env` as well. If the admin bot is in use, also copy the new
+`WEBHOOK_SECRET_TOKEN` and change `ADMIN_BOT_CHILD_WEBHOOK_URL` to the new
+domain. Configure the same webhook secret in Telegram's `setWebhook` call.
+Then restart each local worker so its SSH tunnel uses the new host. The chosen
+fast cutover allows tasks still queued in the old DigitalOcean Redis to be
+lost. Keep the old server until a test update succeeds through every active
+worker; only then delete the Droplet.
+
 ### Without Docker (Debian 13 or Ubuntu)
 
 On a fresh Ubuntu 26.04 or Debian 13 server, point your domain at the server
