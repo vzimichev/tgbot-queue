@@ -149,9 +149,10 @@ not spend the limit twice.
 
 The AWS stack in `deploy/aws/gateway-stack.yaml` provisions an isolated VPC,
 public subnet, security group, Ubuntu 26.04 x86_64 `t3.micro` Docker host, 1
-GB swap, and a stable Elastic IP in `eu-central-1`. It opens HTTP/HTTPS to the
-internet and SSH only from `AllowedSshCidr`. Redis is not exposed publicly.
-It does not accept, generate, or store application secrets.
+GB swap, a 24 GB encrypted root volume, and a stable Elastic IP in
+`eu-central-1`. It opens HTTP/HTTPS to the internet and SSH only from
+`AllowedSshCidr`. Redis is not exposed publicly. It does not accept, generate,
+or store application secrets.
 
 Before creating the stack, create an EC2 key pair in `eu-central-1` and learn
 the public IPv4 address of the computer that will administer and run the local
@@ -192,6 +193,21 @@ The existing DigitalOcean server runs the Docker gateway and a separate
 `admin-bot-worker`; its `admin-bot_admin_data` volume contains the admin
 SQLite database and must be migrated. Redis data is only the Celery queue and
 is intentionally not migrated in this fast-cutover procedure.
+
+Before cutover, retain these items until the migration has been verified:
+
+- `/opt/tgbot-queue/.env` for rollback; create a new root `.env` on EC2 and
+  record its new webhook/Redis secrets securely.
+- `bot_factories/admin_bot/.env`, including `ADMIN_BOT_TOKEN` and
+  `ADMIN_BOT_OWNER_ID`.
+- The `admin-bot_admin_data` volume; it contains managed-bot tokens, limits,
+  activation links, and the transaction ledger.
+- The private key or SSH configuration required by each local worker. The new
+  EC2 host accepts the EC2 key-pair user as `ubuntu`, not the old `root` login.
+
+Do not transfer the old host SSH keys, Docker images, Redis queue volume, or
+Let's Encrypt certificate. The Docker installer rebuilds images and recreates
+the certificate renewal timer and Nginx renewal hook on EC2.
 
 Before DNS cutover, pause the old admin worker long enough to create a
 consistent backup, then start it again. Run this on the current server:
@@ -263,10 +279,22 @@ Verify `https://your-domain.duckdns.org/openapi.json`, update the Telegram
 webhook with the new secret, and replace `SSH_HOST` in every local
 bot-specific `.env` with `ubuntu@your-domain.duckdns.org`. Copy the new
 `REDIS_PASSWORD` to each bot-specific `.env`; then restart every local worker
-so its SSH tunnel uses the new host. The fast cutover allows tasks still queued
-in the old Redis volume to be lost. Keep the old server until test updates
-succeed through the gateway and every active worker; only then delete the
-Droplet.
+so its SSH tunnel uses the new host. Re-register the webhook of the admin bot
+and every existing managed bot: managed-bot webhook secrets are derived from
+`WEBHOOK_SECRET_TOKEN`, so rotating it invalidates their previous webhook
+credentials. Run the managed-bot command first in dry-run mode, then for real;
+it logs only managed-bot IDs, never their tokens:
+
+```bash
+sudo docker compose -f bot_factories/admin_bot/docker-compose.yml exec -T worker \
+  python -m bot_factories.admin_bot.register_webhooks --dry-run
+sudo docker compose -f bot_factories/admin_bot/docker-compose.yml exec -T worker \
+  python -m bot_factories.admin_bot.register_webhooks
+```
+
+The fast cutover allows tasks still queued in the old Redis volume to be lost.
+Keep the old server until test updates succeed through the gateway and every
+active worker; only then delete the Droplet.
 
 ### Without Docker (Debian 13 or Ubuntu)
 

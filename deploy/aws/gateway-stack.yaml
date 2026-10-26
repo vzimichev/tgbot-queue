@@ -135,7 +135,7 @@ Resources:
           Ebs:
             DeleteOnTermination: true
             Encrypted: true
-            VolumeSize: 16
+            VolumeSize: 24
             VolumeType: gp3
       Tags:
         - Key: Name
