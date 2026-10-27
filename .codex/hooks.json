@@ -1,0 +1,18 @@
+{
+  "description": "Run Python lint checks after code edits.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$(git rev-parse --show-toplevel)/.codex/hooks/lint.sh\"",
+            "timeout": 120,
+            "statusMessage": "Running Black and Ruff"
+          }
+        ]
+      }
+    ]
+  }
+}
