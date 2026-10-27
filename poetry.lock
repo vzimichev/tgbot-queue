@@ -374,6 +374,44 @@ jupyter = ["ipython (>=7.8.0)", "tokenize-rt (>=3.2.0)"]
 uvloop = ["uvloop (>=0.15.2)"]
 
 [[package]]
+name = "boto3"
+version = "1.43.119"
+description = "The AWS SDK for Python (Boto3)"
+optional = false
+python-versions = ">=3.10"
+files = [
+    {file = "boto3-1.43.119-py3-none-any.whl", hash = "sha256:d1718edae48c3241d289c0ece8a515399a7242c406e35328b9685c4d24039186"},
+    {file = "boto3-1.43.119.tar.gz", hash = "sha256:e12c3b1d81713e14bd6947b7412d9d0ea49b320642d795ded1d64d6483ca6f49"},
+]
+
+[package.dependencies]
+botocore = ">=1.43.119,<1.44.0"
+jmespath = ">=0.7.1,<2.0.0"
+s3transfer = ">=0.19.0,<0.20.0"
+
+[package.extras]
+crt = ["botocore[crt] (>=1.21.0,<2.0a0)"]
+
+[[package]]
+name = "botocore"
+version = "1.43.119"
+description = "Low-level, data-driven core of boto 3."
+optional = false
+python-versions = ">=3.10"
+files = [
+    {file = "botocore-1.43.119-py3-none-any.whl", hash = "sha256:6026aec97914a4fa116915fd3b05af899912eff51b93fb8dff95aa228a3e761b"},
+    {file = "botocore-1.43.119.tar.gz", hash = "sha256:ed11934be6e6d398ac21b7fe03778c9584368eeff8ba5371581f19bb47db0b6a"},
+]
+
+[package.dependencies]
+jmespath = ">=0.7.1,<2.0.0"
+python-dateutil = ">=2.1,<3.0.0"
+urllib3 = ">=1.25.4,<2.2.0 || >2.2.0,<3"
+
+[package.extras]
+crt = ["awscrt (==0.36.0)"]
+
+[[package]]
 name = "celery"
 version = "5.6.3"
 description = "Distributed Task Queue."
@@ -386,13 +424,19 @@ files = [
 
 [package.dependencies]
 billiard = ">=4.2.1,<5.0"
+boto3 = {version = ">=1.26.143", optional = true, markers = "extra == \"sqs\""}
 click = ">=8.1.2,<9.0"
 click-didyoumean = ">=0.3.0"
 click-plugins = ">=1.1.1"
 click-repl = ">=0.2.0"
-kombu = ">=5.6.0"
+kombu = [
+    {version = ">=5.6.0"},
+    {version = ">=5.5.0", extras = ["sqs"], optional = true, markers = "extra == \"sqs\""},
+]
+pycurl = {version = ">=7.45.4", optional = true, markers = "sys_platform != \"win32\" and platform_python_implementation == \"CPython\" and python_version >= \"3.9\" and extra == \"sqs\""}
 python-dateutil = ">=2.8.2"
 tzlocal = "*"
+urllib3 = {version = ">=1.26.16", optional = true, markers = "extra == \"sqs\""}
 vine = ">=5.1.0,<6.0"
 
 [package.extras]
@@ -749,6 +793,17 @@ colors = ["colorama"]
 plugins = ["setuptools"]
 
 [[package]]
+name = "jmespath"
+version = "1.1.0"
+description = "JSON Matching Expressions"
+optional = false
+python-versions = ">=3.9"
+files = [
+    {file = "jmespath-1.1.0-py3-none-any.whl", hash = "sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64"},
+    {file = "jmespath-1.1.0.tar.gz", hash = "sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d"},
+]
+
+[[package]]
 name = "kombu"
 version = "5.6.2"
 description = "Messaging library for Python."
@@ -761,8 +816,11 @@ files = [
 
 [package.dependencies]
 amqp = ">=5.1.1,<6.0.0"
+boto3 = {version = ">=1.26.143", optional = true, markers = "extra == \"sqs\""}
 packaging = "*"
+pycurl = {version = ">=7.43.0.5", optional = true, markers = "sys_platform != \"win32\" and platform_python_implementation == \"CPython\" and extra == \"sqs\""}
 tzdata = ">=2025.2"
+urllib3 = {version = ">=1.26.16", optional = true, markers = "extra == \"sqs\""}
 vine = "5.1.0"
 
 [package.extras]
@@ -1188,6 +1246,64 @@ files = [
 ]
 
 [[package]]
+name = "pycurl"
+version = "7.49.0"
+description = "PycURL -- A Python Interface To The cURL library"
+optional = false
+python-versions = ">=3.10"
+files = [
+    {file = "pycurl-7.49.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:f062e9b826a2c2ec9d9f1573c7a4338834831b8b37f3d8c68f9669fa9f88c608"},
+    {file = "pycurl-7.49.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:a5887093d29a1eb75c023e22dc2c04bf6601f7b262a981028a0e36ab0755e84d"},
+    {file = "pycurl-7.49.0-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:e6d6af67b05d7dd97194e9588f169e25a85956b4995e7c37877a289c5a95a8bf"},
+    {file = "pycurl-7.49.0-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:4849a7599017e78fc94f5e8e82c6b9da07e482fb69abc4284b2df1c6a204c0a3"},
+    {file = "pycurl-7.49.0-cp310-cp310-win_amd64.whl", hash = "sha256:89c10bcc900bab4e8a5ffdcdd3f4dc6d7ee34863e69b60ae63c7641843e446e6"},
+    {file = "pycurl-7.49.0-cp310-cp310-win_arm64.whl", hash = "sha256:17910e34762c5a865830784efc0ff9e0045ff886a1e0d8b5d3b67c19abf9e2ab"},
+    {file = "pycurl-7.49.0-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:b19c8abb40d8d1d958b5ac134af33869043782c24b8868f48883ee34e3f5db61"},
+    {file = "pycurl-7.49.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:3a42e64f197ac3e95cc64a06a23a1a01ac55a22c8a7e94c9d93e9fe7d0c09d31"},
+    {file = "pycurl-7.49.0-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:b1cd6cea1618ec2a6bbe4e430b34dcc83c5bfb5373a25809fb77e4ec451990ad"},
+    {file = "pycurl-7.49.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:6f88539845d3bb2cf2ce0ccbc1bb8b9ed9e401a0d874798aeabc5f16f0f95c4d"},
+    {file = "pycurl-7.49.0-cp311-cp311-win_amd64.whl", hash = "sha256:ee47cf03a9d3ad8f309c7a34dc6236c48d81257b91b164f9a8fb2363464a5ffa"},
+    {file = "pycurl-7.49.0-cp311-cp311-win_arm64.whl", hash = "sha256:ccd92ed511675c52227c8e66c12d6f46cfae226960d563d116fd92e3038c5444"},
+    {file = "pycurl-7.49.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:575d6d5d6e0c00577f81dfcbd696c27d824130abae2be9be167a4bfbdfc86c61"},
+    {file = "pycurl-7.49.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:2769aa99dac37856dba3c432eccd0585e1fa98735cb64b0c52f5ed552120a0d9"},
+    {file = "pycurl-7.49.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:8aa63c7f2d8451681d7f709a097d3df14ce335aa8a1321499d9cd2c7e35a4a18"},
+    {file = "pycurl-7.49.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:b02ca356fb9aaced336a2b5ecd74f5eb1896442ddbfb47250e5cddb2b8578fab"},
+    {file = "pycurl-7.49.0-cp312-cp312-win_amd64.whl", hash = "sha256:e4062a52f378a2f0e6c0da4571fa0a676dd59681869d5645354caf56bba1c906"},
+    {file = "pycurl-7.49.0-cp312-cp312-win_arm64.whl", hash = "sha256:5b8247cc5f76ce37ced12ec5f25d11f6e4b5d87795dc5b4891b48aac70a7c2ff"},
+    {file = "pycurl-7.49.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:1787fee6107fbe6771ff0e3f73b2878ea92711a844a91c2ef3831d5d6f40c613"},
+    {file = "pycurl-7.49.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:21a197fcdc12c282136ad5879cf8566178d5228d84641f90f120bc988008239d"},
+    {file = "pycurl-7.49.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:2778868eec4353ded220bb1e0c3b9e63fa903e94ede3861cfc66ac386b55eabb"},
+    {file = "pycurl-7.49.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:0553733d9654a6faf6c672320d68576b07e407b2104c5e7b5569346fcfafa6f3"},
+    {file = "pycurl-7.49.0-cp313-cp313-win_amd64.whl", hash = "sha256:a57eac115ebec7cc0130f3921896e04569653b3b6ca10293c05e21f50a3de997"},
+    {file = "pycurl-7.49.0-cp313-cp313-win_arm64.whl", hash = "sha256:f1008cc6b1f0339284b80caeb61dca221f926817dd6f461b4e762b89c66ca3fd"},
+    {file = "pycurl-7.49.0-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:c640b751f6b48fe9ea9c23bb201c55aa6d6b528032cdb024d655e6a9297e249e"},
+    {file = "pycurl-7.49.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:cd7087d96cb16d1c36b6fd3986c731d13ee2666c642b10e0f90822a96d106421"},
+    {file = "pycurl-7.49.0-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:53c2e43d3ac91a51faebb6e0eba6aebd376a01d57202e6713f7e99954b3b29ab"},
+    {file = "pycurl-7.49.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:113708c9619af2d07daa43c179538f87458a0298797553da1bae2c18ce5d944d"},
+    {file = "pycurl-7.49.0-cp314-cp314-win_amd64.whl", hash = "sha256:023228cf243176c4cc00664335be4169bd4fb366d5f012e4e5e2d7fb85b65c0b"},
+    {file = "pycurl-7.49.0-cp314-cp314-win_arm64.whl", hash = "sha256:d08c0a1b858564a5b72c66e791d1ab1a37d62863967a5fc82150ad14f7cfc05c"},
+    {file = "pycurl-7.49.0-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:e09605c621680151da64c9da0a1a9b78fb24111c4ebaa0e2ab7ca18b6676d997"},
+    {file = "pycurl-7.49.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:f19b1153d68da7988b44fcc15826c9acac848a144070fff00d9c1b04d9820d06"},
+    {file = "pycurl-7.49.0-cp314-cp314t-manylinux_2_28_aarch64.whl", hash = "sha256:61caaf8edf39fbc01d8c4326aeeab809e3b50d82cdc0d61c9481a87568631b69"},
+    {file = "pycurl-7.49.0-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:ef0192aefe5b71a2f35ba69aee640634c1b9610ab5117790b2558edffc6caf4a"},
+    {file = "pycurl-7.49.0-cp314-cp314t-win_amd64.whl", hash = "sha256:571d8874dc7037c5d270346c7a1a7825f18354b4b2ab75646459e166fa63c319"},
+    {file = "pycurl-7.49.0-cp314-cp314t-win_arm64.whl", hash = "sha256:b0f413a826f11e5ebb05225108da1a40f2f60cdcf1e8450a188127c5e7963d7c"},
+    {file = "pycurl-7.49.0-cp315-cp315-macosx_10_15_x86_64.whl", hash = "sha256:873a441bee695ce280aa11f4e2220389d6395c70e2728d585a998b648e4a0345"},
+    {file = "pycurl-7.49.0-cp315-cp315-macosx_11_0_arm64.whl", hash = "sha256:4c2c6059651ef9859a350877001c2155810def14fcca1e7ad88f6e845251e930"},
+    {file = "pycurl-7.49.0-cp315-cp315-manylinux_2_28_aarch64.whl", hash = "sha256:10be3ff2c57d792a00a5bc2d900a2153823516a5acb5463775d64aa586eca8d3"},
+    {file = "pycurl-7.49.0-cp315-cp315-manylinux_2_28_x86_64.whl", hash = "sha256:684747cca0e1a8d045c4a3b9a4db3e604bedfbc932955377a58998491c7d29e8"},
+    {file = "pycurl-7.49.0-cp315-cp315-win_amd64.whl", hash = "sha256:a34a5a4885fc244f6976738f8ad2235b9eb526b0886fa5ce1ad926540f90545e"},
+    {file = "pycurl-7.49.0-cp315-cp315-win_arm64.whl", hash = "sha256:b485321ca8de7d3ddd24aad1746beaf22c6b1d5d7dfea95ca9390b8f6f940fc8"},
+    {file = "pycurl-7.49.0-cp315-cp315t-macosx_10_15_x86_64.whl", hash = "sha256:b6f0fc0c6317fe74da605088435161b1e6756c07aa51c2a02b819e399d3b19bc"},
+    {file = "pycurl-7.49.0-cp315-cp315t-macosx_11_0_arm64.whl", hash = "sha256:88561246362aa35e3e99c70d0fd6d46379e89e7d2efe3caaab2ecf0fee261a47"},
+    {file = "pycurl-7.49.0-cp315-cp315t-manylinux_2_28_aarch64.whl", hash = "sha256:fa556d6ad832b5bb879517b751b29e3dcfc75f5771971be3106c0e116987aa5b"},
+    {file = "pycurl-7.49.0-cp315-cp315t-manylinux_2_28_x86_64.whl", hash = "sha256:d6c9ecda1bdeca76649d8230d5b187dba781122222d3eda83f7d3214144c9483"},
+    {file = "pycurl-7.49.0-cp315-cp315t-win_amd64.whl", hash = "sha256:938cecd67c7f30a0a650fcc9de00af77a41a44cdbf851ad6088624bf6b0f0e6b"},
+    {file = "pycurl-7.49.0-cp315-cp315t-win_arm64.whl", hash = "sha256:1371e217a7e4d86ff6efedd576b5267b42143a9964df91dba3fe7d31a68aa18a"},
+    {file = "pycurl-7.49.0.tar.gz", hash = "sha256:d4327da9dea72768f942f831bbaa5a64adca4d7c89f3141da7a833d3c600ab90"},
+]
+
+[[package]]
 name = "pydantic"
 version = "2.13.5"
 description = "Data validation using Python type hints"
@@ -1493,6 +1609,23 @@ files = [
 ]
 
 [[package]]
+name = "s3transfer"
+version = "0.19.3"
+description = "An Amazon S3 Transfer Manager"
+optional = false
+python-versions = ">=3.10"
+files = [
+    {file = "s3transfer-0.19.3-py3-none-any.whl", hash = "sha256:24eb7535804306355e31c952a90022bf5b2f9d760f9a11062c7493a217c08553"},
+    {file = "s3transfer-0.19.3.tar.gz", hash = "sha256:8326acc3d056d7f7b8a37110c7d2aea41f67e83f6ae79cd3b5fbcca34c726406"},
+]
+
+[package.dependencies]
+botocore = ">=1.37.4,<2.0a.0"
+
+[package.extras]
+crt = ["botocore[crt] (>=1.37.4,<2.0a.0)"]
+
+[[package]]
 name = "six"
 version = "1.17.0"
 description = "Python 2 and 3 compatibility utilities"
@@ -1573,6 +1706,23 @@ tzdata = {version = "*", markers = "platform_system == \"Windows\""}
 [package.extras]
 devenv = ["zest.releaser"]
 testing = ["check_manifest", "pyroma", "pytest (>=4.3)", "pytest-cov", "pytest-mock (>=3.3)", "ruff"]
+
+[[package]]
+name = "urllib3"
+version = "2.8.0"
+description = "HTTP library with thread-safe connection pooling, file post, and more."
+optional = false
+python-versions = ">=3.10"
+files = [
+    {file = "urllib3-2.8.0-py3-none-any.whl", hash = "sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3"},
+    {file = "urllib3-2.8.0.tar.gz", hash = "sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63"},
+]
+
+[package.extras]
+brotli = ["brotli (>=1.2.0)", "brotlicffi (>=1.2.0.0)"]
+h2 = ["h2 (>=4,<5)"]
+socks = ["pysocks (>=1.5.6,!=1.5.7,<2.0)"]
+zstd = ["backports-zstd (>=1.0.0)"]
 
 [[package]]
 name = "uvicorn"
@@ -1796,4 +1946,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.13,<3.15"
-content-hash = "a9e90f0a90231c993215e4007186b4683e0ee7923ee91dbddf29db8927a80950"
+content-hash = "880b898a3e08a33a1a015bc6378d26b4c7eaf5c79e80799fd110042e015ff2e6"

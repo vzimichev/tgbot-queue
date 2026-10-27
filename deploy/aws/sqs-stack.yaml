@@ -1,0 +1,74 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Celery SQS transport for the Telegram gateway — isolated from the EC2 stack to avoid replacing the running gateway.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: tgbot-queue
+    AllowedPattern: ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$
+  SqsVisibilityTimeout:
+    Type: Number
+    Default: 3600
+    MinValue: 0
+    MaxValue: 43200
+    Description: Seconds an in-progress Celery task remains hidden in SQS.
+
+Resources:
+  TelegramUpdatesQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      QueueName: !Sub ${ProjectName}-telegram-updates
+      ReceiveMessageWaitTimeSeconds: 20
+      VisibilityTimeout: !Ref SqsVisibilityTimeout
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  GatewayPublishRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: publish-telegram-updates
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ['sqs:SendMessage', 'sqs:GetQueueUrl', 'sqs:GetQueueAttributes']
+                Resource: !GetAtt TelegramUpdatesQueue.Arn
+
+  GatewayPublishInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref GatewayPublishRole]
+
+  TelegramWorkerQueuePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Attach to the IAM identity used by Celery workers consuming Telegram updates.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:ChangeMessageVisibility', 'sqs:GetQueueUrl', 'sqs:GetQueueAttributes']
+            Resource: !GetAtt TelegramUpdatesQueue.Arn
+
+Outputs:
+  SqsQueueName:
+    Value: !GetAtt TelegramUpdatesQueue.QueueName
+  SqsQueueUrl:
+    Value: !Ref TelegramUpdatesQueue
+  GatewayInstanceProfileName:
+    Value: !Ref GatewayPublishInstanceProfile
+  TelegramWorkerQueuePolicyArn:
+    Value: !Ref TelegramWorkerQueuePolicy

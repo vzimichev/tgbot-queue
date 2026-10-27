@@ -19,7 +19,7 @@ This lets you prototype AI-powered bots **locally**, with full GPU access, while
 
 - **Webhook Gateway** (FastAPI) — receives Telegram updates securely.
 
-- **Queue** (Redis) — decouples your cloud and local machines.
+- **Queue** (Redis by default, or AWS SQS) — decouples your cloud and local machines.
 
 - **Workers** (Celery) — execute heavy processing (AI/ML/audio/video/etc.).
 
@@ -50,7 +50,7 @@ The rest of the architecture remains unchanged.
 
 ### Architecture Overview:
 
-    Telegram → FastAPI → Celery Task → Redis → Worker → Aiogram Bot → Telegram API
+    Telegram → FastAPI → Celery Task → Redis or SQS → Worker → Aiogram Bot → Telegram API
 
 Aiogram **does not receive webhooks directly** --- it runs inside a
 Celery worker.
@@ -74,10 +74,54 @@ REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_PASSWORD=guest1
 
+# Redis is the default broker and remains the Celery result backend.
+CELERY_BROKER=redis
+
+# Required only for CELERY_BROKER=sqs. The URL must be for an existing queue.
+# SQS_REGION=eu-central-1
+# SQS_QUEUE_NAME=telegram_updates
+# SQS_QUEUE_URL=https://sqs.eu-central-1.amazonaws.com/123456789012/telegram_updates
+# SQS_POLLING_INTERVAL=1
+# SQS_VISIBILITY_TIMEOUT=3600
+
 # Select the task and queue belonging to the worker this gateway serves.
 ```
 
 All variables are loaded via `shared/config.py`.
+
+### Choosing the Celery broker
+
+Redis remains the default for local development. Set `CELERY_BROKER=sqs` in
+both the gateway and the matching worker environment to use Celery's native
+Kombu SQS transport. No application task code or `send_task`/`.delay()` calls
+change. The gateway and worker must use the same `SQS_QUEUE_NAME` and
+`SQS_QUEUE_URL`.
+
+`SQS_QUEUE_URL` is mandatory in SQS mode. It is registered as a Kombu
+predefined queue, so the application uses that existing queue and never
+silently creates SQS infrastructure. `SQS_REGION` selects the AWS region,
+`SQS_POLLING_INTERVAL` controls the empty-queue polling delay, and
+`SQS_VISIBILITY_TIMEOUT` controls how long an in-progress task is hidden.
+
+AWS credentials are intentionally not configured in this repository. Boto3
+uses the standard AWS credential provider chain: environment credentials or
+profile for development, and an IAM role for EC2, ECS, or EKS in production.
+Grant the gateway `sqs:SendMessage`; grant workers `sqs:ReceiveMessage`,
+`sqs:DeleteMessage`, and `sqs:ChangeMessageVisibility`. Grant
+`sqs:GetQueueAttributes` when required by the queue policy or operational
+tooling. Scope these permissions to the configured queue ARN.
+
+Redis remains the Celery result backend in both modes. Therefore, an SQS
+deployment still needs reachable Redis for task results; the existing Docker
+Compose Redis service and worker SSH tunnels stay in place.
+
+SQS provides at-least-once delivery. The existing late acknowledgement and
+single-message prefetch settings are preserved, but a task may run again if a
+worker dies or exceeds its visibility timeout. Set `SQS_VISIBILITY_TIMEOUT`
+above the longest FaceFusion job (up to SQS's 12-hour limit) with a safety
+margin, and configure the SQS queue's own visibility timeout consistently.
+Avoid relying on Redis-specific Celery remote-control/event behavior when
+operating with SQS.
 
 Local bot credentials belong in separate, ignored files:
 
@@ -171,7 +215,8 @@ aws cloudformation create-stack \
   --parameters \
     ParameterKey=KeyName,ParameterValue=your-existing-key-pair \
     ParameterKey=AllowedSshCidr,ParameterValue=203.0.113.10/32 \
-    ParameterKey=GatewayDomain,ParameterValue=your-domain.duckdns.org
+    ParameterKey=GatewayDomain,ParameterValue=your-domain.duckdns.org \
+  --capabilities CAPABILITY_IAM
 
 aws cloudformation wait stack-create-complete \
   --region eu-central-1 \
@@ -188,6 +233,22 @@ The outputs contain the Elastic IP and SSH command. Wait for cloud-init to
 finish, then connect using the `ubuntu` user. The stack's first-boot setup
 installs basic tools, enables a 1 GB swap file, disables password and keyboard
 interactive SSH, and enables UFW for ports 22, 80, and 443.
+
+For SQS mode, deploy the independent queue stack. It deliberately does not
+update the EC2 stack, avoiding replacement of an already-running gateway:
+
+```bash
+aws cloudformation create-stack \
+  --region eu-central-1 \
+  --stack-name tgbot-queue-sqs \
+  --template-body file://deploy/aws/sqs-stack.yaml \
+  --capabilities CAPABILITY_IAM
+```
+
+Copy `SqsQueueName` and `SqsQueueUrl` from that stack's outputs into both the
+gateway and worker environments, set `CELERY_BROKER=sqs`, attach its gateway
+instance profile to the EC2 instance, and attach `TelegramWorkerQueuePolicyArn`
+to the IAM identity used by external workers.
 
 The existing DigitalOcean server runs the Docker gateway and a separate
 `admin-bot-worker`; its `admin-bot_admin_data` volume contains the admin
@@ -365,6 +426,19 @@ Run your local worker that contains the **aiogram bot handlers** and executes he
 The echo launcher loads its selected env file, opens an SSH tunnel to the
 server's Redis, and starts the Celery worker. Stop it with Ctrl+C. The cloud
 instance receives webhooks and publishes updates to the shared queue.
+
+For Redis, leave `CELERY_BROKER=redis` and start the worker as above. For SQS,
+put the same SQS settings in the gateway `.env` and the worker's bot-specific
+environment file, set `CELERY_BROKER=sqs`, then run the same worker command:
+
+```bash
+./bot_factories/echo_bot/start_worker.sh
+# or
+./bot_factories/faceswap_bot/start_worker.sh
+```
+
+The SSH tunnel is still needed in either mode because Redis remains the result
+backend. No SQS resource is created by these commands.
 
 ## Setting the Telegram Webhook
 

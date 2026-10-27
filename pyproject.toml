@@ -13,7 +13,7 @@ uvicorn = "^0.38.0"
 httpx = "^0.28.1"
 python-dotenv = "^1.0.1"
 pydantic-settings = "^2.3.0"
-celery = "^5.6.0"
+celery = {version = "^5.6.0", extras = ["sqs"]}
 redis = "^7.1.0"
 aiogram = "^3.28.2"
 

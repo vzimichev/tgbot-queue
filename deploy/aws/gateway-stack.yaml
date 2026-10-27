@@ -3,6 +3,10 @@ Description: Isolated EC2 host for the Telegram gateway. Application secrets are
   never accepted by this stack; add them on the instance after it is
   provisioned.
 
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
 Parameters:
   KeyName:
     Type: AWS::EC2::KeyPair::KeyName
