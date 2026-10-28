@@ -10,24 +10,66 @@ from shared.config import settings
 from worker.celery_tasks import register_default_telegram_task
 
 TELEGRAM_UPDATE_TASK = "telegram.process_update"
-TELEGRAM_UPDATE_QUEUE = "telegram_updates"
+TELEGRAM_UPDATE_QUEUE = (
+    settings.sqs_queue_name
+    if settings.celery_broker.lower() == "sqs"
+    else "telegram_updates"
+)
+
+
+def _broker_configuration() -> tuple[str, dict]:
+    broker = settings.celery_broker.lower()
+    if broker == "redis":
+        return (
+            f"redis://:{settings.redis_password}@{settings.redis_host}:{settings.redis_port}/1",
+            {},
+        )
+
+    if broker != "sqs":
+        raise ValueError("CELERY_BROKER must be either 'redis' or 'sqs'")
+
+    if not settings.sqs_region or not settings.sqs_queue_url:
+        raise ValueError(
+            "SQS_REGION and SQS_QUEUE_URL are required when CELERY_BROKER=sqs"
+        )
+
+    # predefined_queues makes Kombu use this queue only; it will not attempt
+    # to create SQS infrastructure. Credentials deliberately stay out of this
+    # configuration so boto3 uses its normal AWS credential provider chain.
+    return (
+        "sqs://",
+        {
+            "region": settings.sqs_region,
+            "polling_interval": settings.sqs_polling_interval,
+            "visibility_timeout": settings.sqs_visibility_timeout,
+            "wait_time_seconds": 20,
+            "predefined_queues": {
+                settings.sqs_queue_name: {"url": settings.sqs_queue_url}
+            },
+        },
+    )
 
 
 class CeleryFactory:
     @staticmethod
     def create_app(router: Optional[Router] = None) -> Celery:
+        broker_url, broker_transport_options = _broker_configuration()
         celery_app = Celery(
             "worker",
-            broker=f"redis://:{settings.redis_password}@{settings.redis_host}:{settings.redis_port}/1",
-            backend=f"redis://:{settings.redis_password}@{settings.redis_host}:{settings.redis_port}/2",
+            broker=broker_url,
         )
 
+        celery_app.conf.broker_transport_options = broker_transport_options
         celery_app.conf.task_acks_late = True
         celery_app.conf.worker_prefetch_multiplier = 1
         celery_app.conf.task_serializer = "json"
-        celery_app.conf.result_serializer = "json"
         celery_app.conf.accept_content = ["json"]
-        celery_app.conf.broker_heartbeat = 30
+        # Webhook deliveries are fire-and-forget.  No caller reads Celery task
+        # results, and failures are retried by the broker because acks are late.
+        # Keeping results disabled means SQS mode has no Redis dependency.
+        celery_app.conf.task_ignore_result = True
+        if settings.celery_broker.lower() == "redis":
+            celery_app.conf.broker_heartbeat = 30
         celery_app.conf.broker_connection_retry_on_startup = True
 
         # The gateway only needs a Celery producer. Telegram runtime objects
