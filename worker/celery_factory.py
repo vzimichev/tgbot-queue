@@ -57,15 +57,17 @@ class CeleryFactory:
         celery_app = Celery(
             "worker",
             broker=broker_url,
-            backend=f"redis://:{settings.redis_password}@{settings.redis_host}:{settings.redis_port}/2",
         )
 
         celery_app.conf.broker_transport_options = broker_transport_options
         celery_app.conf.task_acks_late = True
         celery_app.conf.worker_prefetch_multiplier = 1
         celery_app.conf.task_serializer = "json"
-        celery_app.conf.result_serializer = "json"
         celery_app.conf.accept_content = ["json"]
+        # Webhook deliveries are fire-and-forget.  No caller reads Celery task
+        # results, and failures are retried by the broker because acks are late.
+        # Keeping results disabled means SQS mode has no Redis dependency.
+        celery_app.conf.task_ignore_result = True
         if settings.celery_broker.lower() == "redis":
             celery_app.conf.broker_heartbeat = 30
         celery_app.conf.broker_connection_retry_on_startup = True

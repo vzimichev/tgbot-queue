@@ -74,7 +74,7 @@ REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_PASSWORD=guest1
 
-# Redis is the default broker and remains the Celery result backend.
+# Redis is the default broker. Celery task results are not stored.
 CELERY_BROKER=redis
 
 # Required only for CELERY_BROKER=sqs. The URL must be for an existing queue.
@@ -111,9 +111,10 @@ Grant the gateway `sqs:SendMessage`; grant workers `sqs:ReceiveMessage`,
 `sqs:GetQueueAttributes` when required by the queue policy or operational
 tooling. Scope these permissions to the configured queue ARN.
 
-Redis remains the Celery result backend in both modes. Therefore, an SQS
-deployment still needs reachable Redis for task results; the existing Docker
-Compose Redis service and worker SSH tunnels stay in place.
+Celery task results are intentionally disabled: the gateway never reads them,
+and `task_acks_late` lets the broker retry failed tasks. Therefore, an SQS
+deployment does not need Redis. Redis is needed only while
+`CELERY_BROKER=redis` remains enabled.
 
 SQS provides at-least-once delivery. The existing late acknowledgement and
 single-message prefetch settings are preserved, but a task may run again if a
@@ -437,8 +438,8 @@ environment file, set `CELERY_BROKER=sqs`, then run the same worker command:
 ./bot_factories/faceswap_bot/start_worker.sh
 ```
 
-The SSH tunnel is still needed in either mode because Redis remains the result
-backend. No SQS resource is created by these commands.
+The SSH tunnel is needed only in Redis-broker mode. No SQS resource is created
+by these commands.
 
 ## Setting the Telegram Webhook
 

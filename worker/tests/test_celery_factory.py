@@ -26,12 +26,10 @@ class CeleryFactoryTest(unittest.TestCase):
             f"redis://:{settings.redis_password}@{settings.redis_host}:{settings.redis_port}/1",
         )
         self.assertEqual(app.conf.broker_transport_options, {})
-        self.assertEqual(
-            app.conf.result_backend,
-            f"redis://:{settings.redis_password}@{settings.redis_host}:{settings.redis_port}/2",
-        )
+        self.assertIsNone(app.conf.result_backend)
+        self.assertTrue(app.conf.task_ignore_result)
 
-    def test_sqs_uses_existing_queue_and_redis_result_backend(self):
+    def test_sqs_uses_existing_queue_without_a_result_backend(self):
         with (
             patch.object(settings, "celery_broker", "sqs"),
             patch.object(settings, "sqs_region", "eu-central-1"),
@@ -47,10 +45,8 @@ class CeleryFactoryTest(unittest.TestCase):
             app = CeleryFactory.create_app()
 
         self.assertEqual(app.conf.broker_url, "sqs://")
-        self.assertEqual(
-            app.conf.result_backend,
-            f"redis://:{settings.redis_password}@{settings.redis_host}:{settings.redis_port}/2",
-        )
+        self.assertIsNone(app.conf.result_backend)
+        self.assertTrue(app.conf.task_ignore_result)
         self.assertEqual(
             app.conf.broker_transport_options,
             {
