@@ -9,7 +9,9 @@ import binascii
 import hmac
 import json
 import logging
+import os
 import re
+from functools import lru_cache
 
 from aiogram.types import Update
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
@@ -45,14 +47,6 @@ class WebhookUpdate(Update):
     update_id: StrictInt
 
 
-def _response(status: int, ok: bool) -> dict:
-    return {
-        "statusCode": status,
-        "headers": {"content-type": "application/json"},
-        "body": json.dumps({"ok": ok}),
-    }
-
-
 def handler(event: dict, context) -> dict:
     try:
         request = GatewayEvent.model_validate(event)
@@ -69,15 +63,20 @@ def handler(event: dict, context) -> dict:
         return _response(404, False)
 
     # Fail closed on missing deployment configuration; never fall back to Redis.
-    if not settings.webhook_secret_token or settings.celery_broker.lower() != "sqs":
+    try:
+        secret = _webhook_secret()
+    except Exception:
+        logger.error("Webhook secret retrieval failed")
+        return _response(503, False)
+    if not secret or settings.celery_broker.lower() != "sqs":
         logger.error("Webhook runtime configuration is incomplete")
         return _response(503, False)
 
     bot_id = int(managed.group(1)) if managed else None
     expected = (
-        managed_bot_webhook_secret(settings.webhook_secret_token, bot_id)
+        managed_bot_webhook_secret(secret, bot_id)
         if bot_id is not None
-        else settings.webhook_secret_token
+        else secret
     )
     headers = {k.lower(): v for k, v in (request.headers or {}).items()}
     supplied = headers.get("x-telegram-bot-api-secret-token")
@@ -109,3 +108,27 @@ def handler(event: dict, context) -> dict:
         logger.error("Webhook task publication failed")
         return _response(503, False)
     return _response(200, True)
+
+
+def _response(status: int, ok: bool) -> dict:
+    return {
+        "statusCode": status,
+        "headers": {"content-type": "application/json"},
+        "body": json.dumps({"ok": ok}),
+    }
+
+
+def _webhook_secret() -> str:
+    secret_arn = os.getenv("WEBHOOK_SECRET_ARN")
+    if not secret_arn:
+        return settings.webhook_secret_token or ""
+    return _read_secret(secret_arn)
+
+
+@lru_cache(maxsize=1)
+def _read_secret(secret_arn: str) -> str:
+    import boto3
+
+    return boto3.client("secretsmanager").get_secret_value(
+        SecretId=secret_arn
+    )["SecretString"]

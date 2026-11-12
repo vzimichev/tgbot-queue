@@ -1,0 +1,105 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Admin and managed bot webhook ingress. Deploy in eu-central-1; worker host is separate.",
+  "Parameters": {
+    "ArtifactBucket": {"Type": "String"},
+    "ArtifactKey": {"Type": "String"},
+    "ArtifactVersion": {"Type": "String", "Description": "Immutable S3 object version of the Lambda ZIP"}
+  },
+  "Resources": {
+    "WebhookSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {"Description": "Shared webhook HMAC root secret", "GenerateSecretString": {"PasswordLength": 64, "ExcludePunctuation": true}}
+    },
+    "DeadLetterQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {"SqsManagedSseEnabled": true, "MessageRetentionPeriod": 1209600}
+    },
+    "UpdatesQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "SqsManagedSseEnabled": true,
+        "ReceiveMessageWaitTimeSeconds": 20,
+        "VisibilityTimeout": 3600,
+        "MessageRetentionPeriod": 1209600,
+        "RedrivePolicy": {"deadLetterTargetArn": {"Fn::GetAtt": ["DeadLetterQueue", "Arn"]}, "maxReceiveCount": 5}
+      }
+    },
+    "LambdaRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"}, "Action": "sts:AssumeRole"}]},
+        "Policies": [{"PolicyName": "webhook-publish", "PolicyDocument": {"Version": "2012-10-17", "Statement": [
+          {"Effect": "Allow", "Action": ["sqs:SendMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"], "Resource": {"Fn::GetAtt": ["UpdatesQueue", "Arn"]}},
+          {"Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": {"Ref": "WebhookSecret"}},
+          {"Effect": "Allow", "Action": ["logs:CreateLogStream", "logs:PutLogEvents"], "Resource": {"Fn::GetAtt": ["LambdaLogs", "Arn"]}}
+        ]}}]
+      }
+    },
+    "LambdaLogs": {"Type": "AWS::Logs::LogGroup", "Properties": {"RetentionInDays": 14}},
+    "WebhookFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Runtime": "python3.13",
+        "Architectures": ["x86_64"],
+        "Handler": "bot_factories.admin_bot.lambda_webhook.handler",
+        "Role": {"Fn::GetAtt": ["LambdaRole", "Arn"]},
+        "Timeout": 25,
+        "MemorySize": 256,
+        "ReservedConcurrentExecutions": 5,
+        "Code": {"S3Bucket": {"Ref": "ArtifactBucket"}, "S3Key": {"Ref": "ArtifactKey"}, "S3ObjectVersion": {"Ref": "ArtifactVersion"}},
+        "LoggingConfig": {"LogGroup": {"Ref": "LambdaLogs"}},
+        "Environment": {"Variables": {
+          "WEBHOOK_SECRET_ARN": {"Ref": "WebhookSecret"},
+          "CELERY_BROKER": "sqs",
+          "SQS_REGION": {"Ref": "AWS::Region"},
+          "SQS_QUEUE_URL": {"Ref": "UpdatesQueue"},
+          "SQS_QUEUE_NAME": {"Fn::GetAtt": ["UpdatesQueue", "QueueName"]}
+        }}
+      }
+    },
+    "Api": {"Type": "AWS::ApiGatewayV2::Api", "Properties": {"ProtocolType": "HTTP"}},
+    "Integration": {"Type": "AWS::ApiGatewayV2::Integration", "Properties": {
+      "ApiId": {"Ref": "Api"}, "IntegrationType": "AWS_PROXY", "IntegrationUri": {"Fn::GetAtt": ["WebhookFunction", "Arn"]}, "PayloadFormatVersion": "2.0", "TimeoutInMillis": 29000
+    }},
+    "AdminRoute": {"Type": "AWS::ApiGatewayV2::Route", "Properties": {"ApiId": {"Ref": "Api"}, "RouteKey": "POST /webhook", "Target": {"Fn::Join": ["/", ["integrations", {"Ref": "Integration"}]]}}},
+    "ManagedRoute": {"Type": "AWS::ApiGatewayV2::Route", "Properties": {"ApiId": {"Ref": "Api"}, "RouteKey": "POST /webhook/managed/{bot_id}", "Target": {"Fn::Join": ["/", ["integrations", {"Ref": "Integration"}]]}}},
+    "ApiLogs": {"Type": "AWS::Logs::LogGroup", "Properties": {"RetentionInDays": 14}},
+    "Stage": {"Type": "AWS::ApiGatewayV2::Stage", "Properties": {
+      "ApiId": {"Ref": "Api"}, "StageName": "$default", "AutoDeploy": true,
+      "DefaultRouteSettings": {"ThrottlingBurstLimit": 10, "ThrottlingRateLimit": 5},
+      "AccessLogSettings": {"DestinationArn": {"Fn::GetAtt": ["ApiLogs", "Arn"]}, "Format": "{\"requestId\":\"$context.requestId\",\"status\":\"$context.status\",\"routeKey\":\"$context.routeKey\"}"}
+    }},
+    "InvokePermission": {"Type": "AWS::Lambda::Permission", "Properties": {
+      "FunctionName": {"Ref": "WebhookFunction"}, "Action": "lambda:InvokeFunction", "Principal": "apigateway.amazonaws.com",
+      "SourceArn": {"Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/POST/webhook*"}, "SourceAccount": {"Ref": "AWS::AccountId"}
+    }},
+    "DeadLetterAlarm": {"Type": "AWS::CloudWatch::Alarm", "Properties": {
+      "AlarmDescription": "Unprocessed Telegram updates require inspection; no notification destination configured.",
+      "Namespace": "AWS/SQS", "MetricName": "ApproximateNumberOfMessagesVisible", "Statistic": "Maximum", "Period": 60, "EvaluationPeriods": 1, "Threshold": 0, "ComparisonOperator": "GreaterThanThreshold", "TreatMissingData": "notBreaching",
+      "Dimensions": [{"Name": "QueueName", "Value": {"Fn::GetAtt": ["DeadLetterQueue", "QueueName"]}}]
+    }},
+    "LambdaErrorsAlarm": {"Type": "AWS::CloudWatch::Alarm", "Properties": {
+      "Namespace": "AWS/Lambda", "MetricName": "Errors", "Statistic": "Sum", "Period": 60, "EvaluationPeriods": 1, "Threshold": 0, "ComparisonOperator": "GreaterThanThreshold", "TreatMissingData": "notBreaching",
+      "Dimensions": [{"Name": "FunctionName", "Value": {"Ref": "WebhookFunction"}}]
+    }},
+    "ApiErrorsAlarm": {"Type": "AWS::CloudWatch::Alarm", "Properties": {
+      "Namespace": "AWS/ApiGateway", "MetricName": "5xx", "Statistic": "Sum", "Period": 60, "EvaluationPeriods": 1, "Threshold": 0, "ComparisonOperator": "GreaterThanThreshold", "TreatMissingData": "notBreaching",
+      "Dimensions": [{"Name": "ApiId", "Value": {"Ref": "Api"}}]
+    }}
+  },
+  "Outputs": {
+    "WebhookUrl": {"Value": {"Fn::Sub": "${Api.ApiEndpoint}/webhook"}},
+    "ManagedWebhookBaseUrl": {"Value": {"Fn::Sub": "${Api.ApiEndpoint}/webhook/managed"}},
+    "QueueUrl": {"Value": {"Ref": "UpdatesQueue"}},
+    "QueueArn": {"Value": {"Fn::GetAtt": ["UpdatesQueue", "Arn"]}},
+    "QueueName": {"Value": {"Fn::GetAtt": ["UpdatesQueue", "QueueName"]}},
+    "WebhookSecretArn": {"Value": {"Ref": "WebhookSecret"}}
+  }
+}

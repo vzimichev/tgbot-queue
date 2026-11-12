@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import unittest
 from unittest.mock import patch
 
@@ -21,19 +22,26 @@ class LambdaWebhookTest(unittest.TestCase):
         self.send = patcher.start()
         self.addCleanup(patcher.stop)
 
-    def event(self, path="/webhook", secret="test-secret"):
-        return {
-            "requestContext": {"http": {"method": "POST", "path": path}},
-            "headers": {"X-Telegram-Bot-Api-Secret-Token": secret},
-            "body": json.dumps({"update_id": 42}),
-        }
-
     def test_admin_publishes_existing_task(self):
         self.assertEqual(webhook.handler(self.event(), None)["statusCode"], 200)
         self.send.assert_called_once_with(
             "telegram.process_update", args=[{"update_id": 42}],
             queue="test-updates", retry=False,
         )
+
+    def test_secret_manager_configuration(self):
+        with patch.dict(os.environ, {"WEBHOOK_SECRET_ARN": "secret-arn"}), patch.object(
+            webhook, "_read_secret", return_value="test-secret"
+        ) as read:
+            self.assertEqual(webhook.handler(self.event(), None)["statusCode"], 200)
+            read.assert_called_once_with("secret-arn")
+
+    def test_secret_lookup_failure_never_publishes(self):
+        with patch.object(webhook, "_webhook_secret", side_effect=RuntimeError("secret")):
+            with self.assertLogs(webhook.logger, level="ERROR") as logs:
+                self.assertEqual(webhook.handler(self.event(), None)["statusCode"], 503)
+        self.assertNotIn("RuntimeError", " ".join(logs.output))
+        self.send.assert_not_called()
 
     def test_managed_base64_publishes_bot_id(self):
         event = self.event(
@@ -107,3 +115,10 @@ class LambdaWebhookTest(unittest.TestCase):
         event["requestContext"]["http"]["method"] = "GET"
         self.assertEqual(webhook.handler(event, None)["statusCode"], 405)
         self.send.assert_not_called()
+
+    def event(self, path="/webhook", secret="test-secret"):
+        return {
+            "requestContext": {"http": {"method": "POST", "path": path}},
+            "headers": {"X-Telegram-Bot-Api-Secret-Token": secret},
+            "body": json.dumps({"update_id": 42}),
+        }
