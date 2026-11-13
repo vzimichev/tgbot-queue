@@ -158,3 +158,20 @@ For future context reduction, preserve the latest user instruction plus this fil
 - 14 local tests passed (JSON consumer and deployment script); shell syntax and whitespace checks passed. Real aiogram/AWS end-to-end validation is pending.
 - No commit, push or deployment performed. Step 6 deploys a published Git branch, so these local changes are not yet deployable through it.
 - Managed webhook routing/consumer support remains a separate increment; current Lambda/API exposes only the admin path.
+
+
+## JSON worker recovery — 2026-11-13
+
+- Found old Celery container repeatedly connecting to AMQP at sqs:5672 rather than consuming SQS.
+- Fixed local step-6 preflight to use `docker compose run --interactive=false -T`: interactive stdin consumed the remaining SSM shell script and falsely reported successful deployment without replacing the worker.
+- Deployed published branch codex/serverless-migration, release 42b960c07829c5b7d7dbb4d31b43b1f4e10fd2f6, to existing EC2 i-086cc9f762f17a4b8 in eu-central-1. Preserved database volume.
+- Verified actual container image changed and logs show queued Telegram updates handled by aiogram. Fresh user command/response verification remains pending.
+- Ten deployment tests passed. Local deployment-script fix is uncommitted.
+
+
+## Step 6 downtime deployment hardening — 2026-11-13
+
+- User requires downtime: stop old service / Compose down → build → secret/SQS preflight → Compose up. Failed build leaves worker stopped; no automatic rollback.
+- Fetch chosen branch directly from GitHub, resolve FETCH_HEAD commit and extract to a fresh release directory. Branch state is captured at fetch time.
+- Added server-side deployment lock, built/running image ID comparison, running/no-restarts check and required final DEPLOY_OK marker; SSM Success alone no longer means deployment success.
+- Twelve local deployment tests passed, including missing-readiness rejection and downtime ordering; shell syntax and diff checks passed. No live deployment or commit for this increment.

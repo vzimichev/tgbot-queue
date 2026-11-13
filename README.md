@@ -253,9 +253,16 @@ The script reads CloudFormation outputs and executes one SSM command. The
 instance must be Online in SSM. No SSH or inbound ports are required.
 
 Runtime settings contain only secret ARNs; the container reads Secrets Manager
-at startup. SQLite stays on the persistent data disk. The new image is built and
-secrets/SQS access checked before replacing the worker. An existing
-`admin-bot.service` is disabled on transition to Compose. There is no automatic
+at startup. SQLite stays on the persistent data disk. Each deployment fetches the selected branch directly from GitHub and records
+its commit SHA. That snapshot is extracted into a fresh directory. The worker
+is stopped with `docker compose down` before `docker compose build` and
+`docker compose up`; downtime includes the build and preflight checks. A failed
+build leaves the worker stopped. An existing `admin-bot.service` is disabled
+before the build. Concurrent deployments are rejected by a server-side lock.
+Success requires the running container to use the built image ID, have no
+startup restarts and emit the JSON worker readiness message. The final output
+records the deployed commit and image ID. Branch updates after fetch belong
+to the next deployment. There is no automatic
 rollback. Stop workers on other hosts before the first production deployment.
 
 SSM output may be buffered or truncated. Failures print the SSM command ID.

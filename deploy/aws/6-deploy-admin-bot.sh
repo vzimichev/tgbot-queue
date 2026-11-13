@@ -79,6 +79,9 @@ def main():
     temporary, region, instance, volume, branch = sys.argv[1:]
     config = base64.b64encode((Path(temporary) / 'runtime.json').read_bytes()).decode()
     remote = r"""set -euo pipefail
+install -d -m 0755 /opt/admin-bot
+exec 9>/opt/admin-bot/deploy.lock
+flock -n 9 || { echo 'Another deployment is running.' >&2; exit 1; }
 echo 'Installing Git and Docker Compose...'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -129,10 +132,11 @@ echo "Downloading GitHub version: $ref"
 if [[ ! -d repo/.git ]]; then
   git clone --no-checkout https://github.com/vzimichev/tgbot-queue.git repo
 fi
-git -C repo fetch --depth=1 origin "refs/heads/$ref"
-release=$(git -C repo rev-parse FETCH_HEAD)
-source_dir=/opt/admin-bot/releases/$release
-mkdir -p "$source_dir"
+git -C repo fetch --depth=1 https://github.com/vzimichev/tgbot-queue.git "refs/heads/$ref"
+release=$(git -C repo rev-parse --verify "FETCH_HEAD^{commit}")
+echo "Selected branch: $ref; Git commit: $release"
+mkdir -p /opt/admin-bot/releases
+source_dir=$(mktemp -d "/opt/admin-bot/releases/$release.XXXXXX")
 git -C repo archive "$release" | tar -x -C "$source_dir"
 export ADMIN_BOT_SOURCE="$source_dir" ADMIN_BOT_RELEASE="$release"
 cat > compose.yaml <<'YAML'
@@ -156,20 +160,26 @@ services:
         max-size: 10m
         max-file: '3'
 YAML
-echo 'Building application image...'
-docker compose build
-echo 'Checking secrets and SQS access...'
-docker compose run --rm --no-deps worker --check
-echo 'Starting admin bot...'
-# Stop the previous deployment only after the new image passes checks.
+echo 'Stopping admin bot (downtime starts)...'
 if systemctl cat admin-bot.service >/dev/null 2>&1; then
   systemctl disable --now admin-bot.service
 fi
+docker compose down
+echo 'Building application image...'
+docker compose build
+expected_image=$(docker image inspect --format '{{.Id}}' "admin-bot:$release")
+echo 'Checking secrets and SQS access...'
+docker compose run --interactive=false -T --rm --no-deps worker --check
+echo 'Starting admin bot...'
 docker compose up -d --no-build --force-recreate
 echo 'Waiting for JSON worker readiness...'
 for attempt in $(seq 1 30); do
-  if docker logs admin-bot-worker 2>&1 | grep -q 'Admin JSON worker ready\.'; then
-    echo "Admin worker ready. Git commit: $release"
+  actual_image=$(docker inspect --format '{{.Image}}' admin-bot-worker)
+  [[ "$actual_image" == "$expected_image" ]] || { echo 'Container image differs from the built image.' >&2; exit 1; }
+  state=$(docker inspect --format '{{.State.Status}} {{.RestartCount}}' admin-bot-worker)
+  [[ "$state" == 'running 0' ]] || { echo "Worker failed startup: $state" >&2; exit 1; }
+  if docker logs admin-bot-worker > worker-startup.log 2>&1 && grep -q 'Admin JSON worker ready\.' worker-startup.log; then
+    echo "DEPLOY_OK commit=$release image=$actual_image"
     exit 0
   fi
   sleep 2
@@ -200,6 +210,8 @@ exit 1
                 print(output[len(shown):], end='', flush=True)
             shown = output
             if result['Status'] == 'Success':
+                if not any(line.startswith('DEPLOY_OK commit=') for line in output.splitlines()):
+                    raise SystemExit(f'Deployment did not confirm worker readiness. SSM command: {command_id}')
                 print('Deployment complete. Verify the Telegram flow separately.')
                 return
             if result['Status'] not in ('Pending', 'InProgress', 'Delayed'):

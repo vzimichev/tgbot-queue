@@ -63,7 +63,7 @@ elif 'send-command' in args:
 elif 'get-command-invocation' in args:
     command = (root / 'command').read_text()
     status = 'Failed' if os.environ.get('MOCK_FAILURE') else 'Success'
-    output = '/tmp/admin-deploy.ABCDEF' if 'mktemp' in command else ''
+    output = '' if os.environ.get('MOCK_NO_READY') else 'DEPLOY_OK commit=abc image=sha256:abc\\n'
     print(json.dumps({'Status': status, 'StandardOutputContent': output}))
 else:
     sys.exit('Unexpected AWS command: ' + str(args))
@@ -89,6 +89,26 @@ else:
         self.assertLess(command.index('apt-get install'), command.index('docker compose build'))
         self.assertEqual((self.root / 'ssm_calls').read_text(), '1')
         subprocess.run(['bash', '-n'], input=command, text=True, check=True)
+
+    def test_success_without_readiness_is_rejected(self):
+        self.env['MOCK_NO_READY'] = '1'
+        result = self.run_script()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('did not confirm worker readiness', result.stderr)
+
+    def test_downtime_order_and_release_verification(self):
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        command = (self.root / 'command').read_text()
+        steps = ['git -C repo fetch', 'git -C repo archive', 'docker compose down',
+                 'docker compose build', 'docker compose run --interactive=false -T',
+                 'docker compose up -d', 'actual_image=$(docker inspect', 'DEPLOY_OK commit=']
+        positions = [command.index(step) for step in steps]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn('FETCH_HEAD^{commit}', command)
+        self.assertIn('mktemp -d "/opt/admin-bot/releases/$release.XXXXXX"', command)
+        self.assertIn('"$actual_image" == "$expected_image"', command)
+        self.assertIn('flock -n 9', command)
 
     def test_explicit_branch_overrides_current_branch(self):
         result = self.run_script(input_text='feature/deploy\n')
