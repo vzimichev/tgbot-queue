@@ -9,14 +9,8 @@ class Settings(BaseSettings):
     telegram_token: Optional[str] = None
     webhook_secret_token: Optional[str] = None
 
-    # Redis
-    redis_host: str = "redis"
-    redis_port: int = 6379
-    redis_password: Optional[str] = None
-
-    # Celery broker. Redis remains the local-development default; SQS uses the
-    # AWS SDK credential provider chain (environment, profile, or IAM role).
-    celery_broker: str = "redis"
+    # Celery uses the AWS SDK credential provider chain.
+    celery_broker: str = "sqs"
     sqs_region: Optional[str] = None
     sqs_queue_name: str = "telegram_updates"
     sqs_queue_url: Optional[str] = None

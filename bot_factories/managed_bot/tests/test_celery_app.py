@@ -10,9 +10,9 @@ def test_celery_app_registers_admin_tasks(monkeypatch):
     create_app = Mock(return_value=app)
     monkeypatch.setattr(CeleryFactory, "create_app", create_app)
 
-    module = importlib.import_module("bot_factories.admin_bot.celery_app")
+    module = importlib.import_module("bot_factories.managed_bot.celery_app")
     module = importlib.reload(module)
 
     create_app.assert_called_with(router=module.admin_router)
     assert module.celery_app is app
-    assert app.conf.imports == ("bot_factories.admin_bot.tasks",)
+    assert app.conf.imports == ("bot_factories.managed_bot.tasks",)

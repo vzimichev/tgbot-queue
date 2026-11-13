@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-from bot_factories.admin_bot import tasks
+from bot_factories.managed_bot import tasks
 
 
 def test_managed_bot_updates_ignores_missing_token_or_update_id(monkeypatch):

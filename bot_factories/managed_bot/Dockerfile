@@ -5,14 +5,16 @@ ENV PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
+
 RUN pip install "poetry==1.8.3" \
     && poetry config virtualenvs.create false
+
 COPY pyproject.toml poetry.lock ./
 RUN poetry install --only main --no-root --no-interaction --no-ansi
-COPY api ./api
-COPY bot_factories ./bot_factories
+
+COPY bot_factories/admin_bot ./bot_factories/admin_bot
+COPY bot_factories/managed_bot ./bot_factories/managed_bot
 COPY shared ./shared
 COPY worker ./worker
 
-EXPOSE 8000
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "bot_factories.admin_bot.json_worker"]
