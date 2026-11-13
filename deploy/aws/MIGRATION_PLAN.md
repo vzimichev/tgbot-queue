@@ -171,3 +171,13 @@ creation, worker readiness and end-to-end Telegram behavior.
 - Export tgbot-queue-managed-WebhookFunctionArn is ready for step 9. Configuration points to the step-7 managed queue and the same webhook root secret ARN as admin.
 - Direct runtime invocation with bot_id=123 and no secret returned application HTTP 403, without FunctionError. Confirms initialization and secret access; no SQS publication attempted. Successful authenticated publication and managed consumer integration remain unverified.
 - Step 9, workers, admin resources and Telegram webhooks were not changed.
+
+
+## Managed Gateway deployment (step 9) — 2026-11-13
+
+- User authorized step 9. Account 642155085753, region eu-central-1; deployed local 9-managed-gateway-stack.yaml.
+- AWS validate-template passed. Reviewed change set: Add only API, integration, managed route, stage, Lambda invoke permission, log group and API error alarm.
+- Stack tgbot-queue-managed-gateway reached CREATE_COMPLETE.
+- ManagedWebhookBaseUrl: https://dci09s6pcl.execute-api.eu-central-1.amazonaws.com/webhook/managed
+- POST /webhook/managed/123 without secret returned HTTP 403 Forbidden, verifying Gateway-to-managed-Lambda integration without publishing an SQS message. Authenticated publication and end-to-end managed processing remain unverified.
+- Managed worker and Telegram webhook cutover remain separate work. Admin resources and webhook registrations were not changed. No commit or push.

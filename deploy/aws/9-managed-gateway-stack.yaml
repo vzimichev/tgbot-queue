@@ -1,0 +1,87 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Managed Telegram HTTP API Gateway. Deploy after the webhook Lambda stack.
+Parameters:
+  ProjectName:
+    Type: String
+    Default: tgbot-queue-managed
+    AllowedPattern: ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$
+    Description: Must match ProjectName of the Lambda stack in this account and region.
+Resources:
+  Api:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name:
+        Fn::Sub: "${AWS::StackName}-http-api"
+      ProtocolType: HTTP
+  Integration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId:
+        Ref: Api
+      IntegrationType: AWS_PROXY
+      IntegrationUri:
+        Fn::ImportValue: !Sub ${ProjectName}-WebhookFunctionArn
+      PayloadFormatVersion: '2.0'
+      TimeoutInMillis: 29000
+  ManagedRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId:
+        Ref: Api
+      RouteKey: POST /webhook/managed/{bot_id}
+      Target:
+        Fn::Join:
+        - "/"
+        - - integrations
+          - Ref: Integration
+  ApiLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 14
+  Stage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId:
+        Ref: Api
+      StageName: "$default"
+      AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 10
+        ThrottlingRateLimit: 5
+      AccessLogSettings:
+        DestinationArn:
+          Fn::GetAtt:
+          - ApiLogs
+          - Arn
+        Format: '{"requestId":"$context.requestId","status":"$context.status","routeKey":"$context.routeKey"}'
+  InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Fn::ImportValue: !Sub ${ProjectName}-WebhookFunctionArn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/POST/webhook/managed/*
+      SourceAccount:
+        Ref: AWS::AccountId
+  ApiErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+      - Name: ApiId
+        Value:
+          Ref: Api
+Outputs:
+  ManagedWebhookBaseUrl:
+    Value:
+      Fn::Sub: "${Api.ApiEndpoint}/webhook/managed"
