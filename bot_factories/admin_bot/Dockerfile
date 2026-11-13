@@ -14,6 +14,5 @@ RUN poetry install --only main --no-root --no-interaction --no-ansi
 
 COPY bot_factories/admin_bot ./bot_factories/admin_bot
 COPY shared ./shared
-COPY worker ./worker
 
 CMD ["python", "-m", "bot_factories.admin_bot.json_worker"]

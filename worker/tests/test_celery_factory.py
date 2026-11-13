@@ -12,22 +12,26 @@ from worker.celery_factory import (
 
 
 class CeleryFactoryTest(unittest.TestCase):
+    def setUp(self):
+        for name, value in {
+            "celery_broker": "sqs",
+            "sqs_region": "eu-central-1",
+            "sqs_queue_url": "https://sqs.eu-central-1.amazonaws.com/123456789012/telegram_updates",
+        }.items():
+            patcher = patch.object(settings, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_producer_does_not_create_telegram_runtime(self):
         app = CeleryFactory.create_app()
 
         self.assertFalse(hasattr(app, "bot"))
         self.assertFalse(hasattr(app, "dp"))
 
-    def test_redis_is_the_default_broker(self):
-        app = CeleryFactory.create_app()
-
-        self.assertEqual(
-            app.conf.broker_url,
-            f"redis://:{settings.redis_password}@{settings.redis_host}:{settings.redis_port}/1",
-        )
-        self.assertEqual(app.conf.broker_transport_options, {})
-        self.assertIsNone(app.conf.result_backend)
-        self.assertTrue(app.conf.task_ignore_result)
+    def test_unsupported_broker_is_rejected(self):
+        with patch.object(settings, "celery_broker", "unsupported"):
+            with self.assertRaisesRegex(ValueError, "CELERY_BROKER must be 'sqs'"):
+                CeleryFactory.create_app()
 
     def test_sqs_uses_existing_queue_without_a_result_backend(self):
         with (

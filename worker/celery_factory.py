@@ -10,23 +10,13 @@ from shared.config import settings
 from worker.celery_tasks import register_default_telegram_task
 
 TELEGRAM_UPDATE_TASK = "telegram.process_update"
-TELEGRAM_UPDATE_QUEUE = (
-    settings.sqs_queue_name
-    if settings.celery_broker.lower() == "sqs"
-    else "telegram_updates"
-)
+TELEGRAM_UPDATE_QUEUE = settings.sqs_queue_name
 
 
 def _broker_configuration() -> tuple[str, dict]:
     broker = settings.celery_broker.lower()
-    if broker == "redis":
-        return (
-            f"redis://:{settings.redis_password}@{settings.redis_host}:{settings.redis_port}/1",
-            {},
-        )
-
     if broker != "sqs":
-        raise ValueError("CELERY_BROKER must be either 'redis' or 'sqs'")
+        raise ValueError("CELERY_BROKER must be 'sqs'")
 
     if not settings.sqs_region or not settings.sqs_queue_url:
         raise ValueError(
@@ -66,10 +56,7 @@ class CeleryFactory:
         celery_app.conf.accept_content = ["json"]
         # Webhook deliveries are fire-and-forget.  No caller reads Celery task
         # results, and failures are retried by the broker because acks are late.
-        # Keeping results disabled means SQS mode has no Redis dependency.
         celery_app.conf.task_ignore_result = True
-        if settings.celery_broker.lower() == "redis":
-            celery_app.conf.broker_heartbeat = 30
         celery_app.conf.broker_connection_retry_on_startup = True
 
         # The gateway only needs a Celery producer. Telegram runtime objects
