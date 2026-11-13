@@ -1,177 +1,173 @@
-# AWS serverless migration: plan and handoff
+# AWS migration: current status and remaining work
 
-Last updated: 2026-11-13. Read this file before continuing migration work.
+Last updated: 2026-11-13. This file describes the current repository and the
+previously recorded deployment evidence; it is not a live AWS inventory.
+Deployment commands are in [README.md](../../README.md).
+[flow.mmd](flow.mmd) remains the target architecture, including components
+that are not implemented yet.
 
-## Goal and agreed decisions
+## Current decisions
 
-- Learn AWS serverless and replace maintained gateway infrastructure with managed services; minimize total custom code and configuration.
-- Target: Telegram → HTTP API Gateway → small Lambda → SQS → Celery on a new EC2 → admin/managed bot handlers and SQLite.
-- Move both admin and managed bot webhooks. Keep management, handlers and SQLite on EC2. Keep Celery.
-- Use CloudFormation, eu-central-1, and the standard API Gateway HTTPS domain. No custom domain, Nginx or Redis required for this deployment.
-- Use the current Telegram admin bot. Start with an empty database; recreate/reconfigure managed bots. No old-data migration or backwards compatibility requirement.
-- Use Secrets Manager for the admin token and webhook root secret. User will manually populate real values later; use REPLACE_ME_WEBHOOK_SECRET / REPLACE_ME_ADMIN_BOT_TOKEN placeholders meanwhile. Managed bot tokens remain in SQLite.
-- Preserve SSH key access restricted to operator CIDR. Do not introduce Session Manager.
-- A short cutover outage is acceptable. Do not run old and new workers simultaneously.
-- No automated database backups. Do not delete the old server or data implicitly.
-- Everything needed to recreate the deployment must be scripted or declared; secret values stay outside Git and stack outputs.
+- Use CloudFormation in `eu-central-1` and API Gateway's HTTPS domain.
+- Keep admin and managed ingress separate: each has its own HTTP API, inline
+  Python Lambda, SQS queue and DLQ. No SAM, Lambda ZIP build or CodeBuild is
+  needed by the current templates.
+- Admin management consumes raw Telegram JSON sequentially through aiogram.
+  Celery remains available for execution tasks and the alternative gateway.
+- Keep admin/managed bot records, tokens, invitations and limits in SQLite on
+  the EC2 worker's separate encrypted data disk.
+- Read the admin token/owner ID and webhook root secret from Secrets Manager.
+  The admin secret is JSON; the webhook secret is plaintext. Managed bot
+  tokens remain in SQLite; managed webhook secrets derive from the root.
+- Admin EC2 administration and deployment use Session Manager/SSM Run Command.
+  No inbound security group rules are required. A key pair is still a required
+  template parameter, but the deployment script does not use SSH.
+- Deploy a published GitHub branch, resolving it to a commit at fetch time.
+  Stop the previous worker before building; downtime is intentional. Failed
+  builds leave it stopped. There is no automatic rollback.
+- No automated database backup is configured. Retaining a disk is not a backup.
+  Do not delete old infrastructure/data or run competing workers implicitly.
 
-## Workflow constraints
+## Implemented in the repository
 
-- Read /Users/valerii_zimichev/.codex/AGENTS.md and current user instructions.
-- Work in small verifiable increments; stop at meaningful checkpoints for feedback.
-- Ask before new dependencies or architecture changes. Do not refactor unrelated bots.
-- Python: high-level functions before helpers; preserve definition-time model dependencies; __main__ last.
-- “Можно” is a question, not execution authorization.
-- Commit only on explicit user request. Previous commit permission does not cover future commits.
-- Never imply passing unit tests means deployed integration is verified.
+| Step | File | Responsibility |
+| --- | --- | --- |
+| 1 | `1-sqs-stack.yaml` | Admin SQS/DLQ, retention and DLQ alarm |
+| 2 | `2-lambda-stack.yaml` | Inline admin Lambda, secret/queue permissions, logs and alarm |
+| 3 | `3-gateway-stack.yaml` | Admin HTTP API: `POST /webhook` |
+| 4 | `4-register-webhook.sh` | Register admin webhook from stack output and supplied credentials |
+| 5 | `5-admin-bot-worker.yaml` | EC2, networking, SSM, IAM and persistent EBS volume |
+| 6 | `6-deploy-admin-bot.sh` | Fetch published branch, build and start admin JSON worker over SSM |
+| 7 | `7-managed-sqs-stack.yaml` | Separate managed SQS/DLQ |
+| 8 | `8-managed-lambda-stack.yaml` | Inline managed Lambda with per-bot secret validation |
+| 9 | `9-managed-gateway-stack.yaml` | Separate `POST /webhook/managed/{bot_id}` API |
 
-## Current gateway stack boundaries (2026-11-13)
+Admin ingress publishes the original Telegram update as raw JSON. The admin
+consumer (`bot_factories/admin_bot/json_worker.py`) validates a JSON object
+with an integer `update_id`, dispatches it to aiogram and deletes the message
+only after successful handling. Errors leave it for retry; no visibility
+extension or exactly-once delivery is implemented.
 
-Lambda uses the manually created `tgbot-queue/webhook` via a full-ARN parameter;
-no generated webhook secret or admin-bot policy remains in its stack.
-`2-lambda-stack.yaml` contains Lambda, role, logs and alarm;
-`3-gateway-stack.yaml` contains API Gateway and invocation permission.
-Build/SQS remain separate. Deploy Lambda from newly built packaged-template.json,
-then API with its WebhookFunctionArn output. No build or deployment was run for
-these changes. Historical progress below describes earlier iterations.
+Managed ingress publishes `{"bot_id": 123, "update": {"update_id": 456, ...}}`.
+The admin JSON consumer cannot consume this envelope. The managed consumer,
+its worker permissions/configuration and processing-task publication are
+unfinished. Existing Celery managed handlers do not fill that gap automatically.
 
-## Progress
+Step 6 validates the mounted disk against the stack's volume ID, fetches a
+branch into a fresh source directory, locks concurrent deployments, stops the
+old worker, builds, checks Secrets Manager/SQS access and starts the container.
+Success requires the expected image, a running container without startup
+restarts and the `Admin JSON worker ready.` message. The output records commit
+and image IDs; it does not certify Telegram behavior.
 
-1. [x] Create codex/serverless-migration from codex/aws-gateway-migration.
-2. [x] Implement Lambda handler for both webhook paths with Pydantic API Gateway models and aiogram Update validation; strict integer update_id.
-   - Existing task contracts: telegram.process_update(update), managed_bot.updates(bot_id, update).
-   - Preserve original JSON when publishing with Celery; validate secrets/HMAC, fail closed, return 503 on secret/publication failure.
-   - Secrets Manager lookup by WEBHOOK_SECRET_ARN, cached per warm runtime; local configured-secret fallback.
-   - 17 unittest tests passed (Lambda tests + shared Celery factory tests).
-3. [ ] Infrastructure and packaging — partial, not ready for full deployment.
-   - [x] Add serverless-stack.json: HTTP API routes, Lambda, SQS/DLQ, generated webhook secret, IAM, 14-day logs, error/DLQ alarms.
-   - [x] Prepare direct Python ZIP packaging in CodeBuild, without SAM, Dockerfile or root Makefile; see lambda_build/README.md. This revised workflow has not been run in AWS.
-   - Previous SAM workflow only: locked hash-checked Linux x86_64 wheels for Python 3.13 installed successfully in CodeBuild; 12 Lambda tests passed there.
-   - [x] AWS validate-template accepted the ingress template (2026-11-12); this does not validate deployment/runtime behavior. Service resource semantics still need review.
-   - Previous SAM workflow only: built ZIP in CodeBuild, run Linux unit/import checks and verify ELF architecture, size, hash and excluded files. Actual Lambda invocation still pending.
-   - [ ] Add new EC2 worker infrastructure and bootstrap, persistent encrypted SQLite storage, IAM queue/secret access, admin token secret integration.
-   - [ ] Provision versioned artifact storage and reproducible worker deployment artifacts.
-4. [ ] Reproducible deployment/configuration tooling.
-   - Immutable image/base-image digests and versioned Lambda artifacts; no mutable branch checkout as a release identity.
-   - Safe initial admin-token provisioning; no secret values in command output, user-data or CloudFormation outputs.
-   - Obtain queue/webhook settings from stack outputs; new worker runs concurrency=1, pool=solo (admin dialogue state is in memory).
-   - Script admin setWebhook and getWebhookInfo verification. Include message, managed_bot and callback_query updates. Managed webhook registration remains automatic during activation.
-5. [ ] Verify delivery and end-to-end behavior.
-   - Bad secrets/body never enqueue; both routes dispatch correct task names/arguments; dependency failures return retryable HTTP errors.
-   - Explicitly verify Celery failure acknowledgement/retry behavior and DLQ delivery. acks_late alone does NOT ensure retry on handler exceptions.
-   - Verify duplicate update handling for activation, limit top-up and video debit. Do not claim exactly-once delivery.
-   - Test worker crash/restart, SQLite persistence, queue visibility expiry, malformed messages and secret lookup failure.
-   - Create managed bot → activate → query balance → top up → send video → verify single debit on repeated update.
-   - Recreate infrastructure from declared inputs and immutable artifacts.
-6. [ ] Cutover after checks and explicit execution authorization.
-   - Stop old worker, start new worker with fresh database, register current admin webhook, recreate/reconfigure managed bots.
-   - Explicitly handle old managed webhook registrations; their records are not migrated.
-   - Verify current admin and newly configured managed bots. Keep old resources until separately authorized for removal.
+## Previously recorded deployment evidence
 
-## Current checkpoint and next action
+These are historical observations from 2026-11-13, not checks repeated during
+the documentation update. Older build artifacts and deployment iterations do
+not establish the state of the current inline templates.
 
-Latest successful build (supersedes failure notes below):
-- CodeBuild 25854273-79e5-4df3-95c5-0eeb9cd1fc65, build number 4: SUCCEEDED end-to-end.
-- Verified and downloaded ZIP (33,592,626 bytes), report.json and SAM packaged-template.json to .cloud-build/lambda/. SHA-256 b364502c3fa7b13086c3eb3d90e8374b014963b73db54e43fe17e20845d96fcb.
-- S3 ZIP key packages/4/2e3922c407ff57421b9fa6e2ec536ca4, version 9_z3DrfwfZDckRLWFocfwvdpoh5NEQ4L, bucket tgbot-queue-serverless-build-artifacts-acnbtsijzwka.
-- Packaged template results/4/template.json, version f.USq9qfSpTQVtHYhdxBHA_BU3BcoOo7. Generated by SAM and pinned by the publishing step, not reconstructed locally.
-- No Lambda deployment, webhook switch, commit or push performed. Next is actual Lambda runtime verification; EC2 worker remains unfinished.
+- Admin Lambda and API Gateway were deployed successfully. Earlier Lambda
+  runtime checks returned 405 for GET and 403 for unauthenticated POST without
+  publishing to SQS. The older gateway iteration also recorded managed-route
+  checks; the current step-3 template exposes only the admin route.
+- Recorded admin webhook URL:
+  `https://ugltwyd3zf.execute-api.eu-central-1.amazonaws.com/webhook`.
+  Read current stack outputs before deployment or registration.
+- `tgbot-queue-admin-worker` deployment completed. Recorded instance:
+  `i-086cc9f762f17a4b8`; retained volume: `vol-068095c5fdd6ad3a1`.
+  SSM was Online and Run Command worked with no inbound access.
+- During recovery from an old Celery container, published release
+  `42b960c07829c5b7d7dbb4d31b43b1f4e10fd2f6` was deployed and container logs
+  showed queued updates handled by aiogram. Fresh user command/response
+  verification was still pending.
+- Subsequent step-6 downtime/readiness hardening passed 12 local deployment
+  tests at that checkpoint; a live deployment of those changes was not recorded.
+- Steps 7–9 passed local YAML checks and seven mocked tests of the inline
+  managed Lambda. No deployment or CloudFormation service validation of those
+  templates was recorded. No managed webhook cutover was performed.
 
-Earlier checkpoints/history:
+## Remaining work
 
-- Branch codex/serverless-migration. Last pushed commit 2a82dae; SAM/CodeBuild changes and this plan remain uncommitted.
-- Created stack tgbot-queue-serverless-build: retained versioned S3 bucket, restricted CodeBuild role, project and 14-day logs. No ingress or EC2 deployment performed.
-- SAM templates, helpers, tests and README now live under deploy/aws/sam/. Root Makefile remains the SAM entry point. Removed the separate build shell script; its commands now live in buildspec.json. Removed custom Docker/ZIP packaging.
-- Both templates passed sam validate --lint. 20 local tests pass.
-- Exactly one paid CodeBuild launched: BuildProject-zZtYz1iyTKpK:f8b161f2-f5d3-4aa0-8412-d006eff01cc3. It FAILED in archive verification after successful SAM build, 12 Linux Lambda tests and ZIP upload (~36.9 MB).
-- Failure: tests generated __pycache__ in artifact; fixed locally with PYTHONDONTWRITEBYTECODE=1. Also allowlisted certifi/cacert.pem (public HTTPS CA bundle) while keeping other PEM files forbidden. Fixes not yet run in CodeBuild.
-- Build details saved in .cloud-build/lambda/build.json. No verified final report or downloaded final ZIP yet.
-- User requested secret stubs: ingress template now provisions REPLACE_ME_WEBHOOK_SECRET; manually replace before registering webhooks. Future admin token placeholder REPLACE_ME_ADMIN_BOT_TOKEN. No real secrets fetched or migrated. Authentication still enabled.
-- Redeployed tgbot-queue-serverless-build with the new deploy/aws/sam/buildspec.json path.
-- User authorized retry. Build 8206741b-9a97-424a-aa78-1a9c9ab52277 (AWS build number 3) built/uploaded ZIP, but final verifier failed on botocore/cacert.pem (public CA bundle). Fixed allowlist locally, added coverage. No further paid build launched.
-- Downloaded that existing ZIP and verified it locally: .cloud-build/lambda/lambda-webhook.zip, 33,592,626 compressed bytes / 76,551,963 unpacked bytes; native ELF x86_64 libraries, no forbidden entries/cache. SHA-256 b364502c3fa7b13086c3eb3d90e8374b014963b73db54e43fe17e20845d96fcb.
-- Artifact: s3://tgbot-queue-serverless-build-artifacts-acnbtsijzwka/packages/3/2e3922c407ff57421b9fa6e2ec536ca4 version oiy0mP8owYKALyB_gJOqjqriiz0tOHgg.
-- Saved report.json and reconstructed packaged-template.json locally from matching source with version-pinned CodeUri. The CodeBuild status remains FAILED; local post-verification succeeded. This is not a successful end-to-end CodeBuild result.
-- Next: actual Lambda runtime smoke test before deployment/cutover. Future builds include corrected verifier; no extra build authorized implicitly.
-- Runtime import verification in actual Lambda remains separate. EC2 worker, admin-token integration and cutover tooling remain incomplete.
+### Managed delivery
 
-## Useful checks
+- Implement a consumer of the managed JSON envelope and connect it to the
+  managed handlers and intended execution-task queue.
+- Configure worker IAM and queue settings for the managed path.
+- Wire the managed gateway's `ManagedWebhookBaseUrl` into the admin worker.
+  Step 6 currently appends `/managed` to the admin gateway URL, which does not
+  select the separate managed API. Its configuration generation must change.
+- After consumer readiness, register managed webhooks against the correct base
+  URL. Existing registrations are not changed by updating configuration alone.
+  `bot_factories.admin_bot.register_webhooks` supports re-registration and a
+  `--dry-run` mode using the configured repository/environment.
+- Validate steps 7–9 with CloudFormation and deploy when explicitly requested.
 
-```sh
-.venv/bin/python -m unittest bot_factories.admin_bot.tests.test_lambda_adapter worker.tests.test_celery_factory -q
-python3 -m json.tool deploy/aws/sam/serverless-stack.json > /dev/null
-aws cloudformation validate-template --region eu-central-1 --template-body file://deploy/aws/sam/serverless-stack.json
+### Reproduction and operations
+
+- Add explicit data-volume initialization/mount/recovery instructions or tooling.
+  Step 5 attaches the disk but does not format/mount it; step 6 requires it at
+  `/var/lib/admin-bot` and refuses an unexpected volume.
+- Record and verify a release procedure. Current deployments resolve a mutable
+  branch to a commit and record image ID; images/base images and dependencies
+  are not a fully immutable deployment artifact chain.
+- Align or retire the Redis-oriented standalone admin Compose recipe: its
+  Dockerfile now defaults to the JSON SQS consumer.
+- Improve webhook verification: step 4 prints `setWebhook` response but does not
+  call `getWebhookInfo`. Its interactive credential prompts use visible input.
+- Configure alarm notification destinations if notifications are required;
+  current alarms have none.
+- Define explicit recovery from failed builds and retained disks. Remote SSM
+  commands may continue after local interruption; inspect their status before
+  retrying. Old releases/images are not automatically cleaned up.
+
+### End-to-end verification and cutover
+
+- Verify authenticated admin delivery from Telegram through Lambda/SQS to the
+  deployed worker, including a fresh user command and response.
+- Verify invalid secrets do not enqueue and dependency/publication errors are
+  retryable on both paths. Managed ingress validates the update shape; admin
+  ingress currently forwards the body without JSON/schema validation. Decide
+  whether to reject malformed admin bodies before queue publication; currently
+  the consumer rejects them and SQS eventually sends them to the DLQ.
+- Verify failed handling, worker crash/restart, visibility expiry, malformed
+  messages, secret lookup failure and eventual DLQ delivery.
+- Verify SQLite persistence and duplicate handling for activation, top-up and
+  video debit. Successful replies followed by failed acknowledgements can repeat.
+- Verify managed bot creation → invitation → activation → balance → top-up →
+  video → one debit for repeated delivery after the managed consumer is ready.
+- Verify execution-task retry/acknowledgement behavior separately from the JSON
+  consumer; Celery late acknowledgement alone does not guarantee exception retry.
+- Recreate the deployment from declared inputs and document any manual steps.
+- At cutover, stop competing old workers, explicitly handle existing managed
+  webhook registrations and verify admin/managed flows. Keep old resources/data
+  until removal is separately authorized. No historical record here authorizes
+  a new cutover or deletion.
+
+## Development workflow and local checks
+
+Follow current user instructions and applicable `AGENTS.md`. Work in small
+verifiable increments; ask before architecture/dependency changes. Treat
+“можно” as a question. Commit only on explicit request. Local tests do not
+prove deployed integration.
+
+```bash
+.venv/bin/python -m unittest discover -s deploy/aws/tests -q
+.venv/bin/pytest bot_factories/admin_bot/tests/test_json_worker.py
+bash -n deploy/aws/4-register-webhook.sh deploy/aws/6-deploy-admin-bot.sh
 git diff --check
 ```
 
-For future context reduction, preserve the latest user instruction plus this file path, current git status, active increment and any new verification results. Update this file at meaningful checkpoints; do not restart completed work.
+Update this status after meaningful implementation/deployment checkpoints.
+Preserve what was actually verified and distinguish local tests, infrastructure
+creation, worker readiness and end-to-end Telegram behavior.
 
 
-## Lambda deployment — 2026-11-13
+## Managed Lambda deployment (step 8) — 2026-11-13
 
-- Created `tgbot-queue-serverless-build` and completed CodeBuild build `BuildProject-2LcoqZJXqoxz:0e9865de-64e7-406a-8bb2-eb1abef6c316`. Linux adapter tests and archive verification passed.
-- Build publication now uses `.lambda-build` on `PYTHONPATH` to access locked runtime dependencies.
-- Removed reserved concurrency with user approval: this account has a regional concurrency quota of 10. The function uses the unreserved pool.
-- Deployed `tgbot-queue-lambda`: `CREATE_COMPLETE`; function `tgbot-queue-lambda-WebhookFunction-SvFEQ2huO6Os` is Active. Its CodeSha256 matches the verified build report.
-- The build started before the concurrency change. `.cloud-build/lambda/deployment-template.json` matches the current source and built S3 ZIP version; it differs from the downloaded packaged template only by removing `ReservedConcurrentExecutions`.
-- Invoked `GET /webhook`: HTTP 405, no Lambda FunctionError. Initialization and webhook-secret access succeeded; no SQS message was sent.
-- Gateway deployment, SQS publication smoke test, worker deployment and Telegram webhook cutover remain pending. Secret values were not printed.
-
-
-## Gateway deployment — 2026-11-13
-
-- Deployed `tgbot-queue-gateway`: `CREATE_COMPLETE`, connected to the existing Lambda.
-- Added an explicit API name (`${AWS::StackName}-http-api`) after AWS rejected the initial unnamed API; the failed stack rolled back and was recreated.
-- Admin webhook URL: `https://ugltwyd3zf.execute-api.eu-central-1.amazonaws.com/webhook`.
-- Managed webhook base URL: `https://ugltwyd3zf.execute-api.eu-central-1.amazonaws.com/webhook/managed`.
-- Both POST routes returned HTTP 403 without the secret header, confirming API Gateway → Lambda integration. No SQS messages were sent.
-- Telegram webhook registration and successful publication to SQS remain pending.
-
-## Worker infrastructure deployment — 2026-11-13
-
-- Deployed `tgbot-queue-admin-worker` in `eu-central-1`; CloudFormation completed successfully.
-- Instance: `i-086cc9f762f17a4b8`; retained data volume: `vol-068095c5fdd6ad3a1`.
-- No inbound security group rules. Session Manager agent is Online on Ubuntu 26.04.
-- SSM Run Command succeeded (`id`, cloud-init status done, SSM service active), confirming AWS CLI administration without opening SSH. An interactive browser session was not tested.
-- Step 6 now temporarily authorizes SSH from the deploying machine's public IPv4 /32 and revokes its rule on exit. Seven local orchestration tests passed, including failure cleanup. No live application deployment was performed.
-- Application deployment (step 6) and Telegram end-to-end verification remain pending.
-
-## Worker deployment transport update — 2026-11-13
-
-- Step 6 now takes only the numeric admin Telegram owner ID and uses AWS CLI SSM Run Command for source transfer and execution. SSH, public IP lookup and security group changes were removed.
-- No infrastructure update or live application deployment was performed for this change. Existing closed inbound rules remain the intended configuration.
-- Six local mocked orchestration tests passed, covering multi-chunk archive integrity, excluded secrets/databases, invalid input, offline SSM and command failure. Bash syntax and diff whitespace checks passed.
-- A local interruption can leave a remote SSM command running or staging files behind; inspect the printed command ID before retrying. This supersedes the earlier temporary SSH deployment procedure.
-
-## Admin secret format correction — 2026-11-13
-
-- Confirmed the existing admin bot secret is JSON with ADMIN_BOT_TOKEN and ADMIN_BOT_OWNER_ID; values were not printed.
-- Step 6 no longer prompts for or accepts an owner ID. Container startup and preflight use the same JSON parsing and validation. The webhook secret remains plaintext.
-- Nine local tests passed, including malformed/missing fields, invalid owner IDs, startup environment and preflight without worker execution. No live application deployment was performed.
-
-
-## Admin JSON consumer — 2026-11-13
-
-- Agreed direction: bot management consumes JSON directly; Celery remains for execution tasks.
-- Added sequential SQS → aiogram consumer for raw admin Telegram updates; acknowledgement follows successful dispatch. Errors leave messages for SQS retry/DLQ. No visibility extension or exactly-once guarantee.
-- Docker default and step-6 startup/readiness now target the JSON consumer. Existing Celery modules and execution tasks remain unchanged.
-- 14 local tests passed (JSON consumer and deployment script); shell syntax and whitespace checks passed. Real aiogram/AWS end-to-end validation is pending.
-- No commit, push or deployment performed. Step 6 deploys a published Git branch, so these local changes are not yet deployable through it.
-- Managed webhook routing/consumer support remains a separate increment; current Lambda/API exposes only the admin path.
-
-
-## JSON worker recovery — 2026-11-13
-
-- Found old Celery container repeatedly connecting to AMQP at sqs:5672 rather than consuming SQS.
-- Fixed local step-6 preflight to use `docker compose run --interactive=false -T`: interactive stdin consumed the remaining SSM shell script and falsely reported successful deployment without replacing the worker.
-- Deployed published branch codex/serverless-migration, release 42b960c07829c5b7d7dbb4d31b43b1f4e10fd2f6, to existing EC2 i-086cc9f762f17a4b8 in eu-central-1. Preserved database volume.
-- Verified actual container image changed and logs show queued Telegram updates handled by aiogram. Fresh user command/response verification remains pending.
-- Ten deployment tests passed. Local deployment-script fix is uncommitted.
-
-
-## Step 6 downtime deployment hardening — 2026-11-13
-
-- User requires downtime: stop old service / Compose down → build → secret/SQS preflight → Compose up. Failed build leaves worker stopped; no automatic rollback.
-- Fetch chosen branch directly from GitHub, resolve FETCH_HEAD commit and extract to a fresh release directory. Branch state is captured at fetch time.
-- Added server-side deployment lock, built/running image ID comparison, running/no-restarts check and required final DEPLOY_OK marker; SSM Success alone no longer means deployment success.
-- Twelve local deployment tests passed, including missing-readiness rejection and downtime ordering; shell syntax and diff checks passed. No live deployment or commit for this increment.
+- User authorized step 8. Account 642155085753, region eu-central-1. Deployed local 8-managed-lambda-stack.yaml; no commit or push.
+- AWS template validation and seven local inline Lambda tests passed. Confirmed function name unused and existing webhook secret uses AWS-managed encryption, without reading its value locally.
+- Reviewed change set: Add only LambdaLogs, LambdaRole and WebhookFunction. tgbot-queue-managed-lambda reached CREATE_COMPLETE.
+- Function managed-to-sqs is Active, LastUpdateStatus Successful, python3.12; ARN arn:aws:lambda:eu-central-1:642155085753:function:managed-to-sqs.
+- Export tgbot-queue-managed-WebhookFunctionArn is ready for step 9. Configuration points to the step-7 managed queue and the same webhook root secret ARN as admin.
+- Direct runtime invocation with bot_id=123 and no secret returned application HTTP 403, without FunctionError. Confirms initialization and secret access; no SQS publication attempted. Successful authenticated publication and managed consumer integration remain unverified.
+- Step 9, workers, admin resources and Telegram webhooks were not changed.
