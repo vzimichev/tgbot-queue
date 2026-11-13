@@ -1,5 +1,10 @@
 # Telegram Processing Gateway
 
+AWS serverless migration: Lambda ZIP builds use Python scripts and CodeBuild. Templates,
+build tools and reproduction commands are in [deploy/aws/lambda_build](deploy/aws/lambda_build/README.md).
+Current decisions and unfinished migration steps are recorded in
+[the migration plan](deploy/aws/MIGRATION_PLAN.md).
+
 A lightweight **FastAPI + Celery** gateway for building Telegram bots that rely on **heavy local processing**—AI image/video generation, audio transcription, face-swapping, large ML models, or any CPU/GPU-intensive tasks.
 
 ## Why this project exists
@@ -190,232 +195,88 @@ not spend the limit twice.
 
 ## Running the Cloud Gateway
 
-### AWS migration (EC2 + CloudFormation)
+### AWS admin worker: steps 5 and 6
 
-The AWS stack in `deploy/aws/gateway-stack.yaml` provisions an isolated VPC,
-public subnet, security group, Ubuntu 26.04 x86_64 `t3.micro` Docker host, 1
-GB swap, a 24 GB encrypted root volume, and a stable Elastic IP in
-`eu-central-1`. It opens HTTP/HTTPS to the internet and SSH only from
-`AllowedSshCidr`. Redis is not exposed publicly. It does not accept, generate,
-or store application secrets.
+`deploy/aws/5-admin-bot-worker.yaml` creates infrastructure only: an Ubuntu
+26.04 x86_64 t3.micro, a public subnet with no inbound access by default, Session Manager access, an
+instance role for the existing SQS queue and two Secrets Manager secrets,
+a 24 GiB root disk and a separate encrypted 8 GiB SQLite disk. No HTTP ports,
+Elastic IP, Redis, gateway software or bot process are created on EC2.
+The public IP can change after stop/start; step 6 reads the current stack output.
 
-Before creating the stack, create an EC2 key pair in `eu-central-1` and learn
-the public IPv4 address of the computer that will administer and run the local
-workers. Use its `/32` CIDR (for example, `203.0.113.10/32`) for SSH access.
-Validate and create the stack from a machine authenticated to your AWS account:
+Create both secrets beforehand. The admin bot SecretString must be a JSON object
+with `ADMIN_BOT_TOKEN` (non-empty token string) and `ADMIN_BOT_OWNER_ID` (positive
+numeric Telegram user ID, as a JSON integer or string). The webhook SecretString
+must be the plain webhook root secret.
+Use the same webhook secret ARN as the Lambda stack. AWS-managed secret keys
+are supported; customer-managed KMS keys require an additional decrypt policy.
+Never put secret values in template parameters or Git.
 
 ```bash
-aws cloudformation validate-template \
+aws cloudformation deploy \
   --region eu-central-1 \
-  --template-body file://deploy/aws/gateway-stack.yaml
-
-aws cloudformation create-stack \
-  --region eu-central-1 \
-  --stack-name tgbot-queue-gateway \
-  --template-body file://deploy/aws/gateway-stack.yaml \
-  --parameters \
-    ParameterKey=KeyName,ParameterValue=your-existing-key-pair \
-    ParameterKey=AllowedSshCidr,ParameterValue=203.0.113.10/32 \
-    ParameterKey=GatewayDomain,ParameterValue=your-domain.duckdns.org \
-  --capabilities CAPABILITY_IAM
-
-aws cloudformation wait stack-create-complete \
-  --region eu-central-1 \
-  --stack-name tgbot-queue-gateway
-
-aws cloudformation describe-stacks \
-  --region eu-central-1 \
-  --stack-name tgbot-queue-gateway \
-  --query 'Stacks[0].Outputs' \
-  --output table
+  --stack-name tgbot-queue-admin-worker \
+  --template-file deploy/aws/5-admin-bot-worker.yaml \
+  --capabilities CAPABILITY_IAM \
+  --parameter-overrides \
+    KeyName=your-existing-key-pair \
+    AdminBotSecretArn=arn:aws:secretsmanager:eu-central-1:ACCOUNT:secret:ADMIN \
+    WebhookSecretArn=arn:aws:secretsmanager:eu-central-1:ACCOUNT:secret:WEBHOOK
 ```
 
-The outputs contain the Elastic IP and SSH command. Wait for cloud-init to
-finish, then connect using the `ubuntu` user. The stack's first-boot setup
-installs basic tools, enables a 1 GB swap file, disables password and keyboard
-interactive SSH, and enables UFW for ports 22, 80, and 443.
+Use the same ProjectName as step 1. The data disk is retained when the stack
+is deleted or the volume is replaced. Retention is not a backup: a recreated
+stack creates a fresh disk; reattaching retained data requires a separate,
+explicit recovery operation. No automated backups are configured.
 
-For SQS mode, deploy the independent queue stack. It deliberately does not
-update the EC2 stack, avoiding replacement of an already-running gateway:
+Deploy a published GitHub branch to EC2 by running step 6 locally:
 
 ```bash
-aws cloudformation create-stack \
-  --region eu-central-1 \
-  --stack-name tgbot-queue-sqs \
-  --template-body file://deploy/aws/sqs-stack.yaml \
-  --capabilities CAPABILITY_IAM
+./deploy/aws/6-deploy-admin-bot.sh
+# Git branch [current-local-branch]:
 ```
 
-Copy `SqsQueueName` and `SqsQueueUrl` from that stack's outputs into both the
-gateway and worker environments, set `CELERY_BROKER=sqs`, attach its gateway
-instance profile to the EC2 instance, and attach `TelegramWorkerQueuePolicyArn`
-to the IAM identity used by external workers.
+Press Enter to deploy the current local branch, or enter another branch. In a
+detached checkout, enter a branch explicitly. Uncommitted and unpushed changes
+are not deployed. The script fetches the branch from the public GitHub repository
+on EC2 and runs Docker Compose to build and start the worker.
 
-The existing DigitalOcean server runs the Docker gateway and a separate
-`admin-bot-worker`; its `admin-bot_admin_data` volume contains the admin
-SQLite database and must be migrated. Redis data is only the Celery queue and
-is intentionally not migrated in this fast-cutover procedure.
+Step 6 installs Git, Docker and Docker Compose on EC2 and enables Docker.
+The step-5 data EBS volume must already be mounted at `/var/lib/admin-bot`.
+The script does not format disks. The current step-5 template does not yet
+mount the disk automatically.
 
-Before cutover, retain these items until the migration has been verified:
+Locally, AWS CLI credentials, Git and Python 3 are required. Optional settings:
+`AWS_REGION` (default `eu-central-1`), `WORKER_STACK` (default
+`tgbot-queue-admin-worker`), `GATEWAY_STACK` (default `tgbot-queue-gateway`).
+The script reads CloudFormation outputs and executes one SSM command. The
+instance must be Online in SSM. No SSH or inbound ports are required.
 
-- `/opt/tgbot-queue/.env` for rollback; create a new root `.env` on EC2 and
-  record its new webhook/Redis secrets securely.
-- `bot_factories/admin_bot/.env`, including `ADMIN_BOT_TOKEN` and
-  `ADMIN_BOT_OWNER_ID`.
-- The `admin-bot_admin_data` volume; it contains managed-bot tokens, limits,
-  activation links, and the transaction ledger.
-- The private key or SSH configuration required by each local worker. The new
-  EC2 host accepts the EC2 key-pair user as `ubuntu`, not the old `root` login.
+Runtime settings contain only secret ARNs; the container reads Secrets Manager
+at startup. SQLite stays on the persistent data disk. The new image is built and
+secrets/SQS access checked before replacing the worker. An existing
+`admin-bot.service` is disabled on transition to Compose. There is no automatic
+rollback. Stop workers on other hosts before the first production deployment.
 
-Do not transfer the old host SSH keys, Docker images, Redis queue volume, or
-Let's Encrypt certificate. The Docker installer rebuilds images and recreates
-the certificate renewal timer and Nginx renewal hook on EC2.
+SSM output may be buffered or truncated. Failures print the SSM command ID.
+Interrupted remote execution may continue; inspect it before retrying. Full
+server logs: `cd /opt/admin-bot && docker compose logs`.
 
-Before DNS cutover, pause the old admin worker long enough to create a
-consistent backup, then start it again. Run this on the current server:
+Readiness means Celery connected to SQS, not that Telegram flows have been
+verified. Check creation, activation, top-up, duplicate video debit and worker
+restart separately. The current gateway template exposes only `/webhook`;
+managed-bot activation also needs `/webhook/managed/{bot_id}` support in the
+gateway and Lambda before that flow can work. This deployment does not add it.
 
 ```bash
-cd /opt/tgbot-queue
-docker compose -f bot_factories/admin_bot/docker-compose.yml stop worker
-docker run --rm \
-  -v admin-bot_admin_data:/source:ro \
-  -v /root:/backup \
-  alpine tar czf /backup/admin-bot-data.tgz -C /source .
-docker compose -f bot_factories/admin_bot/docker-compose.yml start worker
+# On EC2 through Session Manager:
+cd /opt/admin-bot
+sudo docker compose logs -f
+sudo docker compose restart
 ```
 
-On the new EC2 instance, clone the repository and create its private gateway
-environment file. This uses the Docker deployment so it matches the current
-server topology:
-
-```bash
-sudo git clone --branch main https://github.com/vzimichev/tgbot-queue.git /opt/tgbot-queue
-sudo install -m 600 /dev/null /opt/tgbot-queue/.env
-sudoedit /opt/tgbot-queue/.env
-```
-
-Use this file format, with new values:
-
-```env
-WEBHOOK_SECRET_TOKEN=replace-with-a-new-random-secret
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
-REDIS_PASSWORD=replace-with-a-new-random-password
-```
-
-Copy the admin configuration and volume archive through the administrator
-machine without keeping a local plaintext copy. Replace both placeholders with
-the real hosts or IP addresses:
-
-```bash
-scp -3 root@OLD_SERVER:/root/admin-bot-data.tgz ubuntu@NEW_SERVER:/tmp/
-scp -3 root@OLD_SERVER:/opt/tgbot-queue/bot_factories/admin_bot/.env \
-  ubuntu@NEW_SERVER:/tmp/admin-bot.env
-```
-
-On the new host, install the admin configuration, change its
-`REDIS_PASSWORD`, `WEBHOOK_SECRET_TOKEN`, and `ADMIN_BOT_CHILD_WEBHOOK_URL` to
-the new values, then restore the volume before starting the admin worker:
-
-```bash
-sudo install -m 600 /tmp/admin-bot.env /opt/tgbot-queue/bot_factories/admin_bot/.env
-sudoedit /opt/tgbot-queue/bot_factories/admin_bot/.env
-sudo docker volume create admin-bot_admin_data
-sudo docker run --rm \
-  -v admin-bot_admin_data:/target \
-  -v /tmp:/backup:ro \
-  alpine tar xzf /backup/admin-bot-data.tgz -C /target
-rm /tmp/admin-bot.env /tmp/admin-bot-data.tgz
-```
-
-At cutover, point DuckDNS at the Elastic IP. Once it resolves to the new host,
-start the gateway and obtain its certificate:
-
-```bash
-cd /opt/tgbot-queue
-sudo bash deploy/docker/install.sh your-domain.duckdns.org
-sudo docker compose -f bot_factories/admin_bot/docker-compose.yml up -d worker
-```
-
-Verify `https://your-domain.duckdns.org/openapi.json`, update the Telegram
-webhook with the new secret, and replace `SSH_HOST` in every local
-bot-specific `.env` with `ubuntu@your-domain.duckdns.org`. Copy the new
-`REDIS_PASSWORD` to each bot-specific `.env`; then restart every local worker
-so its SSH tunnel uses the new host. Re-register the webhook of the admin bot
-and every existing managed bot: managed-bot webhook secrets are derived from
-`WEBHOOK_SECRET_TOKEN`, so rotating it invalidates their previous webhook
-credentials. Run the managed-bot command first in dry-run mode, then for real;
-it logs only managed-bot IDs, never their tokens:
-
-```bash
-sudo docker compose -f bot_factories/admin_bot/docker-compose.yml exec -T worker \
-  python -m bot_factories.admin_bot.register_webhooks --dry-run
-sudo docker compose -f bot_factories/admin_bot/docker-compose.yml exec -T worker \
-  python -m bot_factories.admin_bot.register_webhooks
-```
-
-The fast cutover allows tasks still queued in the old Redis volume to be lost.
-Keep the old server until test updates succeed through the gateway and every
-active worker; only then delete the Droplet.
-
-### Without Docker (Debian 13 or Ubuntu)
-
-On a fresh Ubuntu 26.04 or Debian 13 server, point your domain at the server
-and allow inbound TCP ports 80 and 443. Create a private `/root/gateway.env`:
-
-```env
-WEBHOOK_SECRET_TOKEN=replace-with-a-random-secret
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
-REDIS_PASSWORD=replace-with-a-random-password
-```
-
-Use a password made of letters, digits and common punctuation without spaces.
-Download and run the bootstrap script, passing your real domain and env file:
-
-```sh
-curl -fsSLo bootstrap.sh https://raw.githubusercontent.com/vzimichev/tgbot-queue/codex/cloud-gateway-deploy/deploy/cloud/bootstrap.sh
-sudo bash bootstrap.sh tgbot-queue.duckdns.org /root/gateway.env
-```
-
-The bootstrap adds swap on small machines, installs packages, checks out this
-branch in `/opt/tgbot-queue`, configures local-only Redis, runs
-`deploy/cloud/install.sh`, and configures Nginx and a Let's Encrypt certificate.
-It can be rerun to update the checkout. Pass an email address as a third
-argument if you want certificate expiry notices. The bot token stays on the
-worker machine; configure the Telegram webhook separately after bootstrap.
-No Celery worker is started on the cloud host.
-
-The script uses Python 3.14 on Ubuntu 26.04 and Python 3.13 on Debian 13.
-The lock file includes wheels for both. Ubuntu 24.04 has Python 3.12 by default.
-
-### With Docker
-
-On a fresh Ubuntu server, copy the project to `/opt/tgbot-queue` and create a
-private `.env` there with `WEBHOOK_SECRET_TOKEN`, `REDIS_PASSWORD`,
-`REDIS_HOST=redis`, and `REDIS_PORT=6379`. Point the domain at the server, then run:
-
-```bash
-sudo bash deploy/docker/install.sh your-domain.example
-```
-
-The installer adds swap on small VMs, installs Docker and Certbot, starts the
-FastAPI gateway, Redis, and Nginx, and obtains a Let's Encrypt certificate.
-Certificate renewal reloads Nginx automatically. Redis is exposed only on the
-server's loopback interface for the local worker's SSH tunnel. The gateway uses
-Celery to publish tasks to Redis; the bot worker runs on your own machine.
-
-View logs:
-
-``` bash
-docker compose logs -f
-```
-
-Stop containers without deleting Redis data:
-
-``` bash
-docker compose down
-```
+The former `ec2-stack.yaml` gateway template is replaced by step 5. Removing
+that file does not delete any existing AWS stack or old server.
 
 ## Running the Worker
 
