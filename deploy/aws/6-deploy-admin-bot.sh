@@ -121,8 +121,7 @@ if sys.argv[1:] == ['--check']:
     boto3.client('sqs').get_queue_attributes(
         QueueUrl=config['SQS_QUEUE_URL'], AttributeNames=['VisibilityTimeout'])
     sys.exit(0)
-os.execvp('celery', ['celery', '-A', 'bot_factories.admin_bot.celery_app', 'worker',
-                     '--loglevel=info', '--concurrency=1', '--pool=solo'])
+os.execvp(sys.executable, [sys.executable, '-m', 'bot_factories.admin_bot.json_worker'])
 START_PY
 cd /opt/admin-bot
 mountpoint -q /var/lib/admin-bot || { echo 'Database disk is not mounted.' >&2; exit 1; }
@@ -167,9 +166,9 @@ if systemctl cat admin-bot.service >/dev/null 2>&1; then
   systemctl disable --now admin-bot.service
 fi
 docker compose up -d --no-build --force-recreate
-echo 'Waiting for Celery readiness...'
+echo 'Waiting for JSON worker readiness...'
 for attempt in $(seq 1 30); do
-  if docker logs admin-bot-worker 2>&1 | grep -q ' ready\.'; then
+  if docker logs admin-bot-worker 2>&1 | grep -q 'Admin JSON worker ready\.'; then
     echo "Admin worker ready. Git commit: $release"
     exit 0
   fi

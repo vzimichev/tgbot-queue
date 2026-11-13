@@ -148,3 +148,13 @@ For future context reduction, preserve the latest user instruction plus this fil
 - Confirmed the existing admin bot secret is JSON with ADMIN_BOT_TOKEN and ADMIN_BOT_OWNER_ID; values were not printed.
 - Step 6 no longer prompts for or accepts an owner ID. Container startup and preflight use the same JSON parsing and validation. The webhook secret remains plaintext.
 - Nine local tests passed, including malformed/missing fields, invalid owner IDs, startup environment and preflight without worker execution. No live application deployment was performed.
+
+
+## Admin JSON consumer — 2026-11-13
+
+- Agreed direction: bot management consumes JSON directly; Celery remains for execution tasks.
+- Added sequential SQS → aiogram consumer for raw admin Telegram updates; acknowledgement follows successful dispatch. Errors leave messages for SQS retry/DLQ. No visibility extension or exactly-once guarantee.
+- Docker default and step-6 startup/readiness now target the JSON consumer. Existing Celery modules and execution tasks remain unchanged.
+- 14 local tests passed (JSON consumer and deployment script); shell syntax and whitespace checks passed. Real aiogram/AWS end-to-end validation is pending.
+- No commit, push or deployment performed. Step 6 deploys a published Git branch, so these local changes are not yet deployable through it.
+- Managed webhook routing/consumer support remains a separate increment; current Lambda/API exposes only the admin path.

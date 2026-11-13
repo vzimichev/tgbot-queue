@@ -262,8 +262,14 @@ SSM output may be buffered or truncated. Failures print the SSM command ID.
 Interrupted remote execution may continue; inspect it before retrying. Full
 server logs: `cd /opt/admin-bot && docker compose logs`.
 
-Readiness means Celery connected to SQS, not that Telegram flows have been
-verified. Check creation, activation, top-up, duplicate video debit and worker
+The admin worker consumes raw Telegram JSON from SQS and dispatches it directly
+to aiogram, sequentially. It deletes each message only after successful handling;
+failures remain for retry after the queue visibility timeout and eventually go
+to the DLQ (five receives). Delivery can repeat, including after a successful
+Telegram response if acknowledgement fails. Handlers must finish within the
+queue visibility timeout; this worker does not extend it.
+Readiness means configuration and SQS access passed, not that Telegram flows have
+been verified. Check creation, activation, top-up, duplicate video debit and worker
 restart separately. The current gateway template exposes only `/webhook`;
 managed-bot activation also needs `/webhook/managed/{bot_id}` support in the
 gateway and Lambda before that flow can work. This deployment does not add it.
