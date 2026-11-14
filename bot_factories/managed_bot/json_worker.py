@@ -1,20 +1,18 @@
-"""Sequential consumer of raw Telegram updates from the admin SQS queue."""
+"""Sequential consumer for the managed-bot SQS ingress contract."""
 
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-async def main():
+async def main() -> None:
     import boto3
-    from aiogram import Bot, Dispatcher
-    from aiogram.client.default import DefaultBotProperties
-    from aiogram.client.session.aiohttp import AiohttpSession
-    from aiogram.enums import ParseMode
 
-    from bot_factories.admin_bot.routes.admin_bot import admin_router
+    from bot_factories.managed_bot.tasks import dispatch_managed_update
     from shared.config import settings
 
     if not settings.sqs_queue_url or not settings.sqs_region:
@@ -26,33 +24,20 @@ async def main():
         QueueUrl=settings.sqs_queue_url,
         AttributeNames=["VisibilityTimeout"],
     )
-    bot = Bot(
-        token=settings.telegram_token,
-        session=AiohttpSession(timeout=settings.telegram_request_timeout),
-        default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
-    )
-    dispatcher = Dispatcher()
-    dispatcher.include_router(admin_router)
-
-    async def dispatch(body):
-        from aiogram.types import Update
-
-        await dispatcher.feed_update(bot, Update.model_validate(body))
-
-    try:
-        logger.info("Admin JSON worker ready.")
-        while True:
-            try:
-                await consume_once(sqs, settings.sqs_queue_url, dispatch)
-            except Exception as error:
-                # Do not log payloads, Telegram URLs or tokens from exceptions.
-                logger.error("SQS polling failed (%s)", type(error).__name__)
-                await asyncio.sleep(5)
-    finally:
-        await bot.session.close()
+    logger.info("Managed JSON worker ready.")
+    while True:
+        try:
+            await consume_once(sqs, settings.sqs_queue_url, dispatch_managed_update)
+        except Exception as error:
+            logger.error("Managed SQS polling failed (%s)", type(error).__name__)
+            await asyncio.sleep(5)
 
 
-async def consume_once(sqs, queue_url, dispatch):
+async def consume_once(
+    sqs: Any,
+    queue_url: str,
+    dispatch: Callable[[int, dict[str, Any]], Awaitable[dict[str, str]]],
+) -> None:
     response = await asyncio.to_thread(
         sqs.receive_message,
         QueueUrl=queue_url,
@@ -62,19 +47,26 @@ async def consume_once(sqs, queue_url, dispatch):
     for message in response.get("Messages", []):
         try:
             body = json.loads(message["Body"])
+            bot_id = body.get("bot_id") if isinstance(body, dict) else None
+            update = body.get("update") if isinstance(body, dict) else None
             if (
-                not isinstance(body, dict)
-                or type(body.get("update_id")) is not int
+                type(bot_id) is not int
+                or bot_id <= 0
+                or not isinstance(update, dict)
+                or type(update.get("update_id")) is not int
             ):
-                raise ValueError("Expected a Telegram update object")
-            await dispatch(body)
+                raise ValueError("Expected managed bot_id and Telegram update")
+            await dispatch(bot_id, update)
             await asyncio.to_thread(
                 sqs.delete_message,
                 QueueUrl=queue_url,
                 ReceiptHandle=message["ReceiptHandle"],
             )
         except Exception as error:
-            logger.error("Update processing failed (%s); message retained", type(error).__name__)
+            logger.error(
+                "Managed update processing failed (%s); message retained",
+                type(error).__name__,
+            )
 
 
 if __name__ == "__main__":

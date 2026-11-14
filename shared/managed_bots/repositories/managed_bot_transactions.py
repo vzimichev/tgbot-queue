@@ -2,13 +2,13 @@ import sqlite3
 from dataclasses import dataclass
 from enum import StrEnum
 
-from bot_factories.admin_bot.db.db_engine import transactional
-from bot_factories.admin_bot.db.managed_bot_transactions import (
+from shared.managed_bots.db.db_engine import transactional
+from shared.managed_bots.db.managed_bot_transactions import (
     ManagedBotTransactionsCrud,
     TransactionType,
     VideoConsumption,
 )
-from bot_factories.admin_bot.db.managed_bots import ManagedBotStatus, ManagedBotsCrud
+from shared.managed_bots.db.managed_bots import ManagedBotStatus, ManagedBotsCrud
 
 
 class ManagedBotVideoChargeResult(StrEnum):

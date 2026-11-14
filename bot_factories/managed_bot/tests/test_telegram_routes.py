@@ -2,8 +2,8 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-from bot_factories.admin_bot.routes import admin_bot as admin_routes
-from bot_factories.managed_bot.routes import managed_bot as routes
+from bot_factories.admin_bot import routes as admin_routes
+from bot_factories.managed_bot import routes as routes
 from bot_factories.admin_bot.db.managed_bots import ActivationResult, ManagedBotStatus
 from bot_factories.admin_bot.repositories.managed_bot_transactions import (
     ManagedBotVideoCharge,

@@ -14,7 +14,7 @@ async def main():
     from aiogram.client.session.aiohttp import AiohttpSession
     from aiogram.enums import ParseMode
 
-    from bot_factories.admin_bot.routes.admin_bot import admin_router
+    from bot_factories.admin_bot.routes import admin_router
     from shared.config import settings
 
     if not settings.sqs_queue_url or not settings.sqs_region:

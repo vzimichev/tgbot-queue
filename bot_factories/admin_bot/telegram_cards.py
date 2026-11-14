@@ -11,8 +11,8 @@ from aiogram.types import (
 )
 from dataclasses import dataclass
 
-from bot_factories.admin_bot.db.managed_bots import ManagedBotRow, ManagedBotStatus
-from bot_factories.admin_bot.repositories.bot_activation import (
+from shared.managed_bots.db.managed_bots import ManagedBotRow, ManagedBotStatus
+from shared.managed_bots.repositories.bot_activation import (
     ManagedBotActivationService,
 )
 

@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 import types
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / '6-deploy-admin-bot.sh'
+SCRIPT = Path(__file__).resolve().parents[1] / '9-deploy-ec2-worker.sh'
 
 
 class WorkerDeployTests(unittest.TestCase):
@@ -21,7 +21,7 @@ class WorkerDeployTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.repo = self.root / 'repo'
-        target = self.repo / 'deploy/aws/6-deploy-admin-bot.sh'
+        target = self.repo / 'deploy/aws/9-deploy-ec2-worker.sh'
         target.parent.mkdir(parents=True)
         shutil.copy2(SCRIPT, target)
         subprocess.run(['git', 'init', '-q', '-b', 'test-branch', str(self.repo)], check=True)
@@ -33,12 +33,18 @@ import base64, json, os, pathlib, re, sys
 root = pathlib.Path(os.environ['MOCK_ROOT'])
 args = sys.argv
 if 'cloudformation' in args:
-    if 'tgbot-queue-admin-worker' in args:
+    if 'tgbot-queue-ec2-worker' in args:
         values = {'InstanceId': 'i-abcdef', 'DataVolumeId': 'vol-abcdef',
                   'QueueUrl': 'https://sqs.eu-central-1.amazonaws.com/123/updates',
                   'AdminBotSecretArn': 'arn:admin', 'WebhookSecretArn': 'arn:webhook'}
         print(json.dumps({'Stacks': [{'StackStatus': os.environ.get('MOCK_STATUS', 'CREATE_COMPLETE'),
               'Outputs': [{'OutputKey': k, 'OutputValue': v} for k, v in values.items()]}]}))
+    elif 'tgbot-queue-managed-sqs' in args:
+        print(json.dumps({'Stacks': [{'Outputs': [{'OutputKey': 'QueueUrl',
+              'OutputValue': 'https://sqs.eu-central-1.amazonaws.com/123/managed-updates'}]}]}))
+    elif 'tgbot-queue-managed-gateway' in args:
+        print(json.dumps({'Stacks': [{'Outputs': [{'OutputKey': 'ManagedWebhookBaseUrl',
+              'OutputValue': 'https://managed.execute-api.eu-central-1.amazonaws.com/webhook/managed'}]}]}))
     else:
         print(json.dumps({'Stacks': [{'Outputs': [{'OutputKey': 'WebhookUrl',
               'OutputValue': 'https://example.execute-api.eu-central-1.amazonaws.com/webhook'}]}]}))

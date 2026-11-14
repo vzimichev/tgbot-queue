@@ -2,7 +2,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-from bot_factories.admin_bot.routes import admin_bot as admin_routes
+from bot_factories.admin_bot import routes as admin_routes
 
 
 def test_parse_seconds_accepts_only_positive_ascii_integers():

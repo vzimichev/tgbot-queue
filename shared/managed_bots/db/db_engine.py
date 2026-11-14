@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -5,10 +6,19 @@ from functools import wraps
 from typing import Any, Callable, TypeVar
 from pathlib import Path
 
-from bot_factories.admin_bot.db.db_init import initialize
+from shared.managed_bots.db.db_init import initialize
 
 
-database_path = Path(__file__).resolve().parents[1] / ".cache" / "admin.sqlite3"
+database_path = Path(
+    os.getenv(
+        "MANAGED_BOT_DATABASE_PATH",
+        Path(__file__).resolve().parents[3]
+        / "bot_factories"
+        / "admin_bot"
+        / ".cache"
+        / "admin.sqlite3",
+    )
+)
 Result = TypeVar("Result")
 
 
@@ -18,6 +28,7 @@ def connect() -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 5000")
+    connection.execute("PRAGMA journal_mode = WAL")
     initialize(connection)
     return connection
 

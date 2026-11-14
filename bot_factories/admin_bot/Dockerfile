@@ -13,6 +13,7 @@ COPY pyproject.toml poetry.lock ./
 RUN poetry install --only main --no-root --no-interaction --no-ansi
 
 COPY bot_factories/admin_bot ./bot_factories/admin_bot
+COPY bot_factories/managed_bot ./bot_factories/managed_bot
 COPY shared ./shared
 
 CMD ["python", "-m", "bot_factories.admin_bot.json_worker"]

@@ -17,14 +17,15 @@ managed bot tokens, invitations and limits in SQLite on a separate EBS volume.
 Lambda code lives directly in the CloudFormation templates: no Lambda ZIP
 build, SAM or CodeBuild is required.
 
-Managed bots have separate ingress templates:
+Managed bots use a separate ingress and worker:
 
 ```text
-Telegram → managed HTTP API Gateway → inline Lambda → managed SQS
+Telegram → managed HTTP API Gateway → inline Lambda → managed SQS → managed JSON worker → aiogram
 ```
 
-The managed JSON consumer and its connection to processing workers are still
-unfinished. Creating the managed ingress does not establish end-to-end delivery.
+The managed worker runs as a separate Docker service on the admin EC2 instance.
+Both services share the SQLite control-plane database on its dedicated EBS volume;
+they never consume each other's queues.
 The target architecture is recorded in [flow.mmd](deploy/aws/flow.mmd);
 implementation status and remaining work are in
 [the migration plan](deploy/aws/MIGRATION_PLAN.md).
@@ -39,7 +40,9 @@ contracts. Do not connect a Celery worker to the raw JSON ingress queues.
 | `deploy/aws/` | Numbered CloudFormation templates, registration/deployment scripts and migration status |
 | `worker/` | Shared Celery factory and task dispatch |
 | `shared/` | Settings, webhook secrets and HTTP job client |
-| `bot_factories/admin_bot/` | Admin/managed bot routes, SQLite repositories and admin JSON worker |
+| `bot_factories/admin_bot/` | Owner-only admin routes and admin JSON worker |
+| `bot_factories/managed_bot/` | Managed-bot routes and managed JSON worker |
+| `shared/managed_bots/` | Shared managed-bot lifecycle, ledger and SQLite persistence |
 | `bot_factories/echo_bot/` | Echo Celery bot |
 | `bot_factories/faceswap_bot/` | FaceSwap Celery bot and FaceFusion integration |
 
@@ -113,9 +116,9 @@ It registers `message`, `callback_query` and `managed_bot` updates and prints
 Telegram's response. Its prompts are visible input. It does not read Secrets
 Manager or verify `getWebhookInfo`; verify delivery separately.
 
-### AWS admin worker: steps 5 and 6
+### AWS shared EC2 worker: steps 8 and 9
 
-`deploy/aws/5-admin-bot-worker.yaml` creates infrastructure only: an Ubuntu
+`deploy/aws/8-ec2-worker-stack.yaml` creates infrastructure only: an Ubuntu
 26.04 x86_64 t3.micro, a public subnet with no inbound access by default, Session Manager access, an
 instance role for the existing SQS queue and two Secrets Manager secrets,
 a 24 GiB root disk and a separate encrypted 8 GiB SQLite disk. No HTTP ports,
@@ -133,8 +136,8 @@ Never put secret values in template parameters or Git.
 ```bash
 aws cloudformation deploy \
   --region eu-central-1 \
-  --stack-name tgbot-queue-admin-worker \
-  --template-file deploy/aws/5-admin-bot-worker.yaml \
+  --stack-name tgbot-queue-ec2-worker \
+  --template-file deploy/aws/8-ec2-worker-stack.yaml \
   --capabilities CAPABILITY_IAM \
   --parameter-overrides \
     KeyName=your-existing-key-pair \
@@ -150,7 +153,7 @@ explicit recovery operation. No automated backups are configured.
 Deploy a published GitHub branch to EC2 by running step 6 locally:
 
 ```bash
-./deploy/aws/6-deploy-admin-bot.sh
+./deploy/aws/9-deploy-ec2-worker.sh
 # Git branch [current-local-branch]:
 ```
 
@@ -166,7 +169,7 @@ mount the disk automatically.
 
 Locally, AWS CLI credentials, Git and Python 3 are required. Optional settings:
 `AWS_REGION` (default `eu-central-1`), `WORKER_STACK` (default
-`tgbot-queue-admin-worker`), `GATEWAY_STACK` (default `tgbot-queue-gateway`).
+`tgbot-queue-ec2-worker`), `GATEWAY_STACK` (default `tgbot-queue-gateway`).
 The script reads CloudFormation outputs and executes one SSM command. The
 instance must be Online in SSM. No SSH or inbound ports are required.
 
@@ -218,12 +221,12 @@ worker or register Telegram webhooks. Deploy in order in `eu-central-1`:
 aws cloudformation deploy \
   --region eu-central-1 \
   --stack-name tgbot-queue-managed-sqs \
-  --template-file deploy/aws/7-managed-sqs-stack.yaml
+  --template-file deploy/aws/5-managed-sqs-stack.yaml
 
 aws cloudformation deploy \
   --region eu-central-1 \
   --stack-name tgbot-queue-managed-lambda \
-  --template-file deploy/aws/8-managed-lambda-stack.yaml \
+  --template-file deploy/aws/6-managed-lambda-stack.yaml \
   --capabilities CAPABILITY_IAM \
   --parameter-overrides \
     WebhookSecretArn=arn:aws:secretsmanager:eu-central-1:ACCOUNT:secret:WEBHOOK
@@ -231,7 +234,7 @@ aws cloudformation deploy \
 aws cloudformation deploy \
   --region eu-central-1 \
   --stack-name tgbot-queue-managed-gateway \
-  --template-file deploy/aws/9-managed-gateway-stack.yaml
+  --template-file deploy/aws/7-managed-gateway-stack.yaml
 ```
 
 All three default to `ProjectName=tgbot-queue-managed`, keeping queue names and

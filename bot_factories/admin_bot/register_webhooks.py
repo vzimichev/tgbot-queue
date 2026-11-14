@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 
-from bot_factories.admin_bot.repositories.bot_manager import ManagedBotsRepository
-from bot_factories.admin_bot.telegram_api import ManagedBotTelegramApi
+from shared.managed_bots.repositories.bot_manager import ManagedBotsRepository
+from shared.managed_bots.telegram_api import ManagedBotTelegramApi
 
 
 @dataclass(frozen=True)

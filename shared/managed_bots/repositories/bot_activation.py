@@ -2,14 +2,14 @@ import re
 import secrets
 from dataclasses import replace
 
-from bot_factories.admin_bot.db.managed_bots import (
+from shared.managed_bots.db.managed_bots import (
     ActivationResult,
     ManagedBotAccessMode,
     ManagedBotRow,
     ManagedBotStatus,
 )
-from bot_factories.admin_bot.telegram_api import ManagedBotTelegramApi
-from bot_factories.admin_bot.repositories.bot_manager import ManagedBotsRepository
+from shared.managed_bots.telegram_api import ManagedBotTelegramApi
+from shared.managed_bots.repositories.bot_manager import ManagedBotsRepository
 
 
 class ManagedBotActivationService:

@@ -1,16 +1,16 @@
-name: admin-bot
+name: managed-bot
 
 services:
   worker:
     build:
       context: ../..
-      dockerfile: bot_factories/admin_bot/Dockerfile
+      dockerfile: bot_factories/managed_bot/Dockerfile
     restart: unless-stopped
     env_file: .env
     environment:
-      TELEGRAM_TOKEN: ${ADMIN_BOT_TOKEN:?Set ADMIN_BOT_TOKEN}
+      MANAGED_BOT_DATABASE_PATH: /app/bot_factories/admin_bot/.cache/admin.sqlite3
     volumes:
-      - admin_data:/app/bot_factories/admin_bot/.cache
+      - managed_data:/app/bot_factories/admin_bot/.cache
 
 volumes:
-  admin_data:
+  managed_data:

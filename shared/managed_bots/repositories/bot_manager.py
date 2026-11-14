@@ -3,11 +3,11 @@ import sqlite3
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
-from bot_factories.admin_bot.db.db_engine import transaction, transactional
-from bot_factories.admin_bot.db.managed_bot_transactions import (
+from shared.managed_bots.db.db_engine import transaction, transactional
+from shared.managed_bots.db.managed_bot_transactions import (
     ManagedBotTransactionsCrud,
 )
-from bot_factories.admin_bot.db.managed_bots import (
+from shared.managed_bots.db.managed_bots import (
     ManagedBotRow,
     ManagedBotStatus,
     ManagedBotsCrud,
