@@ -4,12 +4,12 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from bot_factories.admin_bot.repositories.bot_manager import ManagedBotAccountResult
-from bot_factories.admin_bot.repositories.managed_bot_transactions import (
+from shared.managed_bots.repositories.bot_manager import ManagedBotAccountResult
+from shared.managed_bots.repositories.managed_bot_transactions import (
     ManagedBotVideoChargeResult,
 )
-from bot_factories.admin_bot.db.managed_bot_transactions import TransactionType
-from bot_factories.admin_bot.dependencies import (
+from shared.managed_bots.db.managed_bot_transactions import TransactionType
+from bot_factories.managed_bot.dependencies import (
     activation_service,
     managed_bot_transactions_repository,
     managed_bots_repository,

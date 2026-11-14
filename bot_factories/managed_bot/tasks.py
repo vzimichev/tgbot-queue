@@ -5,8 +5,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import Update
 from celery import shared_task
 
-from bot_factories.admin_bot.repositories.bot_manager import ManagedBotsRepository
-from bot_factories.managed_bot.routes.managed_bot import managed_bot_router
+from shared.managed_bots.repositories.bot_manager import ManagedBotsRepository
+from bot_factories.managed_bot.routes import managed_bot_router
 
 
 MANAGED_BOT_UPDATES_TASK = "managed_bot.updates"
@@ -20,23 +20,28 @@ def managed_bot_token(bot_id: int) -> str | None:
     return bot.child_bot_token if bot else None
 
 
-@shared_task(name=MANAGED_BOT_UPDATES_TASK)
-def managed_bot_updates(bot_id: int, body: dict[str, Any]) -> dict[str, str]:
-    token = managed_bot_token(bot_id)
+async def dispatch_managed_update(bot_id: int, body: dict[str, Any]) -> dict[str, str]:
+    """Dispatch one managed ingress update using the token for its bot ID."""
     update_id = body.get("update_id")
-    if not token or not isinstance(update_id, int):
+    if not isinstance(update_id, int):
+        raise ValueError("Managed update must contain an integer update_id")
+
+    token = await asyncio.to_thread(managed_bot_token, bot_id)
+    if not token:
         return {"status": "ignored"}
 
-    async def dispatch() -> dict[str, str]:
-        bot = Bot(token=token)
-        try:
-            return await managed_bot_dispatcher.feed_update(
-                bot=bot,
-                update=Update.model_validate(body),
-                managed_bot_id=bot_id,
-                managed_update_id=update_id,
-            )
-        finally:
-            await bot.session.close()
+    bot = Bot(token=token)
+    try:
+        return await managed_bot_dispatcher.feed_update(
+            bot=bot,
+            update=Update.model_validate(body),
+            managed_bot_id=bot_id,
+            managed_update_id=update_id,
+        )
+    finally:
+        await bot.session.close()
 
-    return asyncio.run(dispatch())
+
+@shared_task(name=MANAGED_BOT_UPDATES_TASK)
+def managed_bot_updates(bot_id: int, body: dict[str, Any]) -> dict[str, str]:
+    return asyncio.run(dispatch_managed_update(bot_id, body))

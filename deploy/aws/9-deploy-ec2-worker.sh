@@ -4,11 +4,13 @@ set -euo pipefail
 
 # Step 1: Choose the existing AWS infrastructure to deploy to.
 region=${AWS_REGION:-eu-central-1}
-worker_stack=${WORKER_STACK:-tgbot-queue-admin-worker}
+worker_stack=${WORKER_STACK:-tgbot-queue-ec2-worker}
 gateway_stack=${GATEWAY_STACK:-tgbot-queue-gateway}
+managed_sqs_stack=${MANAGED_SQS_STACK:-tgbot-queue-managed-sqs}
+managed_gateway_stack=${MANAGED_GATEWAY_STACK:-tgbot-queue-managed-gateway}
 # Ask which published branch to deploy; Enter selects the local branch.
 if [[ $# -ne 0 ]]; then
-  echo 'Usage: 6-deploy-admin-bot.sh' >&2
+  echo 'Usage: 9-deploy-ec2-worker.sh' >&2
   exit 1
 fi
 repo=$(cd "$(dirname "$0")/../.." && pwd)
@@ -29,6 +31,8 @@ trap 'exit 143' TERM
 # Step 4: Read AWS stack outputs to connect the app to the existing infrastructure.
 aws cloudformation describe-stacks --region "$region" --stack-name "$worker_stack" > "$tmp/worker.json"
 aws cloudformation describe-stacks --region "$region" --stack-name "$gateway_stack" > "$tmp/gateway.json"
+aws cloudformation describe-stacks --region "$region" --stack-name "$managed_sqs_stack" > "$tmp/managed-sqs.json"
+aws cloudformation describe-stacks --region "$region" --stack-name "$managed_gateway_stack" > "$tmp/managed-gateway.json"
 python3 - "$tmp" "$region" <<'PY'
 import json
 import pathlib
@@ -49,15 +53,27 @@ volume = outputs['DataVolumeId']
 if not re.fullmatch(r'i-[0-9a-f]+', instance) or not re.fullmatch(r'vol-[0-9a-f]+', volume):
     raise SystemExit('Unexpected instance ID or EBS volume ID.')
 queue = outputs['QueueUrl']
-config = {
+managed_sqs = json.loads((root / 'managed-sqs.json').read_text())['Stacks'][0]
+managed_gateway = json.loads((root / 'managed-gateway.json').read_text())['Stacks'][0]
+managed_queue = {o['OutputKey']: o['OutputValue'] for o in managed_sqs['Outputs']}['QueueUrl']
+managed_url = next(o['OutputValue'] for o in managed_gateway['Outputs'] if o['OutputKey'] == 'ManagedWebhookBaseUrl')
+if not re.fullmatch(r'https://[a-zA-Z0-9.-]+/webhook/managed', managed_url):
+    raise SystemExit('Unexpected managed gateway webhook URL.')
+admin_config = {
     'AWS_DEFAULT_REGION': sys.argv[2], 'SQS_REGION': sys.argv[2],
     'CELERY_BROKER': 'sqs', 'SQS_QUEUE_URL': queue,
     'SQS_QUEUE_NAME': queue.rsplit('/', 1)[-1],
-    'ADMIN_BOT_CHILD_WEBHOOK_URL': url + '/managed',
+    'ADMIN_BOT_CHILD_WEBHOOK_URL': managed_url,
     'ADMIN_BOT_SECRET_ARN': outputs['AdminBotSecretArn'],
     'WEBHOOK_SECRET_ARN': outputs['WebhookSecretArn'],
 }
-(root / 'runtime.json').write_text(json.dumps(config))
+managed_config = {
+    'AWS_DEFAULT_REGION': sys.argv[2], 'SQS_REGION': sys.argv[2],
+    'SQS_QUEUE_URL': managed_queue,
+    'SQS_QUEUE_NAME': managed_queue.rsplit('/', 1)[-1],
+    'MANAGED_BOT_DATABASE_PATH': '/app/bot_factories/admin_bot/.cache/admin.sqlite3',
+}
+(root / 'runtime.json').write_text(json.dumps({'admin': admin_config, 'managed': managed_config}))
 (root / 'instance').write_text(instance)
 (root / 'volume').write_text(volume)
 
@@ -102,10 +118,20 @@ import sys
 import boto3
 
 config = json.loads(Path('/run/admin-bot/config.json').read_text())
-os.environ.update(config)
+kind = os.environ.get('WORKER_KIND', 'admin')
+if kind not in ('admin', 'managed'):
+    sys.exit('Unknown worker kind')
+runtime = config.get(kind, config)
+os.environ.update(runtime)
+if kind == 'managed':
+    if sys.argv[1:] == ['--check']:
+        boto3.client('sqs').get_queue_attributes(
+            QueueUrl=runtime['SQS_QUEUE_URL'], AttributeNames=['VisibilityTimeout'])
+        sys.exit(0)
+    os.execvp(sys.executable, [sys.executable, '-m', 'bot_factories.managed_bot.json_worker'])
 try:
     client = boto3.client('secretsmanager')
-    admin = json.loads(client.get_secret_value(SecretId=config['ADMIN_BOT_SECRET_ARN'])['SecretString'])
+    admin = json.loads(client.get_secret_value(SecretId=runtime['ADMIN_BOT_SECRET_ARN'])['SecretString'])
     token = admin['ADMIN_BOT_TOKEN']
     owner = admin['ADMIN_BOT_OWNER_ID']
     if isinstance(owner, bool) or not isinstance(owner, (str, int)):
@@ -113,7 +139,7 @@ try:
     owner = str(owner)
     if not owner.isascii() or not owner.isdecimal() or int(owner) <= 0:
         raise ValueError('Owner ID must be a positive integer')
-    secret = client.get_secret_value(SecretId=config['WEBHOOK_SECRET_ARN'])['SecretString']
+    secret = client.get_secret_value(SecretId=runtime['WEBHOOK_SECRET_ARN'])['SecretString']
     if not isinstance(token, str) or not token or not secret or token.startswith('REPLACE_ME') or secret.startswith('REPLACE_ME'):
         raise ValueError('Secret is empty or still a placeholder')
 except Exception:
@@ -122,7 +148,7 @@ os.environ.update(ADMIN_BOT_TOKEN=token, TELEGRAM_TOKEN=token,
                   ADMIN_BOT_OWNER_ID=owner, WEBHOOK_SECRET_TOKEN=secret)
 if sys.argv[1:] == ['--check']:
     boto3.client('sqs').get_queue_attributes(
-        QueueUrl=config['SQS_QUEUE_URL'], AttributeNames=['VisibilityTimeout'])
+        QueueUrl=runtime['SQS_QUEUE_URL'], AttributeNames=['VisibilityTimeout'])
     sys.exit(0)
 os.execvp(sys.executable, [sys.executable, '-m', 'bot_factories.admin_bot.json_worker'])
 START_PY
@@ -142,13 +168,29 @@ export ADMIN_BOT_SOURCE="$source_dir" ADMIN_BOT_RELEASE="$release"
 cat > compose.yaml <<'YAML'
 name: admin-bot-aws
 services:
-  worker:
+  admin:
     image: admin-bot:${ADMIN_BOT_RELEASE:?}
     build:
       context: ${ADMIN_BOT_SOURCE:?}
       dockerfile: bot_factories/admin_bot/Dockerfile
     container_name: admin-bot-worker
     restart: unless-stopped
+    entrypoint: [python, /run/admin-bot/start.py]
+    volumes:
+      - /var/lib/admin-bot/db:/app/bot_factories/admin_bot/.cache
+      - /opt/admin-bot/runtime.json:/run/admin-bot/config.json:ro
+      - /opt/admin-bot/start.py:/run/admin-bot/start.py:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+  managed:
+    image: admin-bot:${ADMIN_BOT_RELEASE:?}
+    container_name: managed-bot-worker
+    restart: unless-stopped
+    environment:
+      WORKER_KIND: managed
     entrypoint: [python, /run/admin-bot/start.py]
     volumes:
       - /var/lib/admin-bot/db:/app/bot_factories/admin_bot/.cache
@@ -169,7 +211,8 @@ echo 'Building application image...'
 docker compose build
 expected_image=$(docker image inspect --format '{{.Id}}' "admin-bot:$release")
 echo 'Checking secrets and SQS access...'
-docker compose run --interactive=false -T --rm --no-deps worker --check
+docker compose run --interactive=false -T --rm --no-deps admin --check
+docker compose run --interactive=false -T --rm --no-deps managed --check
 echo 'Starting admin bot...'
 docker compose up -d --no-build --force-recreate
 echo 'Waiting for JSON worker readiness...'
@@ -178,7 +221,9 @@ for attempt in $(seq 1 30); do
   [[ "$actual_image" == "$expected_image" ]] || { echo 'Container image differs from the built image.' >&2; exit 1; }
   state=$(docker inspect --format '{{.State.Status}} {{.RestartCount}}' admin-bot-worker)
   [[ "$state" == 'running 0' ]] || { echo "Worker failed startup: $state" >&2; exit 1; }
-  if docker logs admin-bot-worker > worker-startup.log 2>&1 && grep -q 'Admin JSON worker ready\.' worker-startup.log; then
+  managed_state=$(docker inspect --format '{{.State.Status}} {{.RestartCount}}' managed-bot-worker)
+  [[ "$managed_state" == 'running 0' ]] || { echo "Managed worker failed startup: $managed_state" >&2; exit 1; }
+  if docker logs admin-bot-worker > worker-startup.log 2>&1 && docker logs managed-bot-worker > managed-worker-startup.log 2>&1 && grep -q 'Admin JSON worker ready\.' worker-startup.log && grep -q 'Managed JSON worker ready\.' managed-worker-startup.log; then
     echo "DEPLOY_OK commit=$release image=$actual_image"
     exit 0
   fi

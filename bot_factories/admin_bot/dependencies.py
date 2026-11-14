@@ -1,11 +1,11 @@
-from bot_factories.admin_bot.repositories.bot_activation import (
+from shared.managed_bots.repositories.bot_activation import (
     ManagedBotActivationService,
 )
-from bot_factories.admin_bot.repositories.bot_manager import ManagedBotsRepository
-from bot_factories.admin_bot.repositories.managed_bot_transactions import (
+from shared.managed_bots.repositories.bot_manager import ManagedBotsRepository
+from shared.managed_bots.repositories.managed_bot_transactions import (
     ManagedBotTransactionsRepository,
 )
-from bot_factories.admin_bot.telegram_api import ManagedBotTelegramApi
+from shared.managed_bots.telegram_api import ManagedBotTelegramApi
 
 
 managed_bots_repository = ManagedBotsRepository()

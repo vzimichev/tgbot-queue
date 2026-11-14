@@ -20,7 +20,7 @@ from bot_factories.admin_bot.telegram_cards import (
     show_bot_card,
     user_card,
 )
-from bot_factories.admin_bot.db.managed_bots import ManagedBotStatus
+from shared.managed_bots.db.managed_bots import ManagedBotStatus
 from bot_factories.admin_bot.dependencies import (
     activation_service,
     managed_bot_transactions_repository,

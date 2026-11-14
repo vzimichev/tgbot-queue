@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Admin bot worker infrastructure only. Run step 6 locally to deploy the application.
+Description: Shared EC2 infrastructure for the admin and managed bot workers. Run step 9 locally to deploy the application.
 
 Metadata:
   AWSToolsMetrics:
@@ -14,12 +14,17 @@ Parameters:
     Default: t3.micro
     AllowedValues:
       - t3.micro
-    Description: x86_64 instance size for the single admin worker.
+    Description: x86_64 instance size for the shared bot workers.
   ProjectName:
     Type: String
     Default: tgbot-queue
     AllowedPattern: ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$
     Description: Value assigned to the Project tag on all stack resources.
+  ManagedProjectName:
+    Type: String
+    Default: tgbot-queue-managed
+    AllowedPattern: ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$
+    Description: ProjectName of the managed SQS stack whose queue this EC2 worker consumes.
   AdminBotSecretArn:
     Type: String
     Description: Existing Secrets Manager ARN containing JSON with ADMIN_BOT_TOKEN and ADMIN_BOT_OWNER_ID.
@@ -105,12 +110,16 @@ Resources:
       VpcId: !Ref Vpc
       Tags:
         - Key: Name
-          Value: !Sub ${ProjectName}-admin-worker
+          Value: !Sub ${ProjectName}-ec2-worker
         - Key: Project
           Value: !Ref ProjectName
 
   WorkerRole:
     Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: The single EC2 host runs isolated admin and managed worker containers.
+        must: Allow each container to consume only its designated SQS queue and scope secret reads to the supplied secret ARNs.
     Properties:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -134,6 +143,14 @@ Resources:
                   - sqs:GetQueueAttributes
                 Resource:
                   Fn::ImportValue: !Sub ${ProjectName}-QueueArn
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:ChangeMessageVisibility
+                  - sqs:GetQueueAttributes
+                Resource:
+                  Fn::ImportValue: !Sub ${ManagedProjectName}-QueueArn
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource:
@@ -173,7 +190,7 @@ Resources:
             VolumeType: gp3
       Tags:
         - Key: Name
-          Value: !Sub ${ProjectName}-admin-worker
+          Value: !Sub ${ProjectName}-ec2-worker
   DataVolume:
     Type: AWS::EC2::Volume
     DeletionPolicy: Retain

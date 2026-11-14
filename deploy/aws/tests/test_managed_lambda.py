@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 from shared.managed_webhook import managed_bot_webhook_secret
 
 
-TEMPLATE = Path(__file__).resolve().parents[1] / '8-managed-lambda-stack.yaml'
+TEMPLATE = Path(__file__).resolve().parents[1] / '6-managed-lambda-stack.yaml'
 
 
 class ManagedLambdaTests(unittest.TestCase):
