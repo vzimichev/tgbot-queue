@@ -3,12 +3,11 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-TUNNEL_PID=""
 API_PID=""
 WORKER_PID=""
 
 cleanup() {
-    for pid in "$WORKER_PID" "$API_PID" "$TUNNEL_PID"; do
+    for pid in "$WORKER_PID" "$API_PID"; do
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             kill "$pid"
             wait "$pid" 2>/dev/null || true
@@ -31,11 +30,6 @@ source "$ENV_FILE"
 set +a
 export APP_ENV_FILE="$ENV_FILE"
 
-: "${SSH_HOST:?SSH_HOST is not set in the FaceSwap env file}"
-: "${SSH_REDIS_PORT:?SSH_REDIS_PORT is not set in the FaceSwap env file}"
-: "${REDIS_HOST:?REDIS_HOST is not set in the FaceSwap env file}"
-: "${REDIS_PORT:?REDIS_PORT is not set in the FaceSwap env file}"
-: "${REDIS_PASSWORD:?REDIS_PASSWORD is not set in the FaceSwap env file}"
 : "${TELEGRAM_TOKEN:?TELEGRAM_TOKEN is not set in the FaceSwap env file}"
 : "${FACESWAP_CLIENT_DIR:?FACESWAP_CLIENT_DIR is not set in the FaceSwap env file}"
 : "${FACESWAP_API_HOST:?FACESWAP_API_HOST is not set in the FaceSwap env file}"
@@ -48,24 +42,6 @@ fi
 
 if [[ ! -x "$FACESWAP_CLIENT_DIR/.venv/bin/uvicorn" ]]; then
     echo "Error: FaceFusion environment not found in $FACESWAP_CLIENT_DIR/.venv" >&2
-    exit 1
-fi
-
-echo "Opening Redis tunnel through $SSH_HOST..."
-ssh \
-    -N \
-    -o BatchMode=yes \
-    -o ExitOnForwardFailure=yes \
-    -o ServerAliveInterval=30 \
-    -o ServerAliveCountMax=3 \
-    -L "${REDIS_HOST}:${REDIS_PORT}:127.0.0.1:${SSH_REDIS_PORT}" \
-    "$SSH_HOST" &
-TUNNEL_PID=$!
-
-sleep 1
-if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
-    wait "$TUNNEL_PID" || true
-    echo "Error: SSH tunnel could not be opened. Is another worker running?" >&2
     exit 1
 fi
 
@@ -103,11 +79,9 @@ echo "Starting face-swap worker. Press Ctrl+C to stop."
     --pool=solo &
 WORKER_PID=$!
 
-# If the tunnel, API, or worker exits, stop the whole stack instead of leaving
-# Celery retrying forever against a dead local port. This loop is compatible
+# If the API or worker exits, stop the whole stack. This loop is compatible
 # with the Bash 3.2 version bundled with macOS (which has no `wait -n`).
-while kill -0 "$TUNNEL_PID" 2>/dev/null \
-    && kill -0 "$API_PID" 2>/dev/null \
+while kill -0 "$API_PID" 2>/dev/null \
     && kill -0 "$WORKER_PID" 2>/dev/null; do
     sleep 1
 done

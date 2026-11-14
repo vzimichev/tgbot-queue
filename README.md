@@ -1,253 +1,354 @@
 # Telegram Processing Gateway
 
-A lightweight **FastAPI + Celery** gateway for building Telegram bots that rely on **heavy local processing**—AI image/video generation, audio transcription, face-swapping, large ML models, or any CPU/GPU-intensive tasks.
+Telegram webhook ingress and bot workers, with heavy processing kept on local
+or remote CPU/GPU machines. Webhooks enter through AWS API Gateway, Lambda
+and SQS.
 
-## Why this project exists
+## Current architecture
 
-Telegram bots deployed to the cloud cannot efficiently run heavy AI pipelines.
+The AWS admin path is implemented:
 
-This project solves the problem with a hybrid approach:
+```text
+Telegram → HTTP API Gateway → inline Lambda → SQS → admin JSON worker → aiogram
+```
 
-- Deploy only a **lightweight webhook gateway** to any cheap cloud VM.
+The admin worker runs sequentially on EC2 in Docker and stores bot records,
+managed bot tokens, invitations and limits in SQLite on a separate EBS volume.
+Lambda code lives directly in the CloudFormation templates: no Lambda ZIP
+build, SAM or CodeBuild is required.
 
-- Run the **heavy workers locally** (or anywhere with GPUs/CPUs).
+Managed bots have separate ingress templates:
 
-This lets you prototype AI-powered bots **locally**, with full GPU access, while keeping cloud costs minimal.
+```text
+Telegram → managed HTTP API Gateway → inline Lambda → managed SQS
+```
 
-## Features
-### Core Functionality
+The managed JSON consumer and its connection to processing workers are still
+unfinished. Creating the managed ingress does not establish end-to-end delivery.
+The target architecture is recorded in [flow.mmd](deploy/aws/flow.mmd);
+implementation status and remaining work are in
+[the migration plan](deploy/aws/MIGRATION_PLAN.md).
 
-- **Webhook Gateway** (FastAPI) — receives Telegram updates securely.
+Raw JSON from the AWS Lambdas and Celery task envelopes are different queue
+contracts. Do not connect a Celery worker to the raw JSON ingress queues.
 
-- **Queue** (Redis) — decouples your cloud and local machines.
+## Repository layout
 
-- **Workers** (Celery) — execute heavy processing (AI/ML/audio/video/etc.).
-
-- **Bot** (Aiogram) — write simple Aiogram handlers; everything else is handled automatically.
-
-### Architecture Benefits
-
-- Local/Remote Hybrid: run GPU tasks locally, gateway in the cloud.
-
-- Fully Modular: gateway, worker, and bot logic are isolated.
-
-- Easy Experimentation: ideal for prototyping creative AI bot ideas.
-
-- Production-Friendly: keep heavy tasks off your cloud instance.
-
-## Folder Structure
-
-    /api                 – FastAPI webhook  
-    /worker              – Celery setup  
-    /bot_factories       – isolated aiogram bot implementations
-    /shared              – configs, clients  
-
-If you want to build a fully customized bot, place it inside
-`bot_factories`.\
-Bot customization is essentially about defining **aiogram routes and
-handlers**.\
-The rest of the architecture remains unchanged.
-
-### Architecture Overview:
-
-    Telegram → FastAPI → Celery Task → Redis → Worker → Aiogram Bot → Telegram API
-
-Aiogram **does not receive webhooks directly** --- it runs inside a
-Celery worker.
+| Path | Purpose |
+| --- | --- |
+| `deploy/aws/` | Numbered CloudFormation templates, registration/deployment scripts and migration status |
+| `worker/` | Shared Celery factory and task dispatch |
+| `shared/` | Settings, webhook secrets and HTTP job client |
+| `bot_factories/admin_bot/` | Admin/managed bot routes, SQLite repositories and admin JSON worker |
+| `bot_factories/echo_bot/` | Echo Celery bot |
+| `bot_factories/faceswap_bot/` | FaceSwap Celery bot and FaceFusion integration |
 
 ## Requirements
 
-- Python 3.13 or 3.14
-- Docker (only for the Docker deployment)
-- Telegram Bot Token
-- Domain name (Telegram requires HTTPS for webhooks)
+- Python 3.13 or 3.14 and Poetry for application development.
+- A Telegram bot token; enable Bot Management Mode in BotFather for the admin bot.
+- AWS CLI credentials and an existing EC2 key pair for AWS deployment.
+- Docker/Compose on the application host (step 6 installs them on EC2).
+- A domain and HTTPS certificate for the alternative Docker/Nginx gateway.
+  AWS ingress uses the API Gateway HTTPS domain instead.
 
-## Configuration
+The inline AWS Lambdas use Python 3.12 independently of the application runtime.
 
-The project root `.env` contains gateway credentials only. Start from
-`.env.example`:
+## AWS deployment
 
-``` env
-WEBHOOK_SECRET_TOKEN=super-secret
+Use `eu-central-1` consistently. The numbered files describe dependencies;
+register the admin webhook only once its worker is ready to consume updates.
+Secrets must already exist in Secrets Manager:
 
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_PASSWORD=guest1
+- Admin secret: JSON containing `ADMIN_BOT_TOKEN` and `ADMIN_BOT_OWNER_ID`.
+- Webhook secret: a plaintext root secret shared by the admin worker and both
+  ingress Lambdas. Managed bots use secrets derived from this root.
 
-# Select the task and queue belonging to the worker this gateway serves.
-```
+Keep secret values outside Git and CloudFormation parameters/outputs. Pass
+secret ARNs to the templates. Customer-managed KMS keys need additional decrypt
+permissions beyond the supplied policies.
 
-All variables are loaded via `shared/config.py`.
+### Admin ingress: steps 1–3
 
-Local bot credentials belong in separate, ignored files:
-
-| File | Used by |
-| --- | --- |
-| `bot_factories/echo_bot/.env` (or one file per echo bot) | Echo Celery worker and its SSH tunnel |
-| `bot_factories/faceswap_bot/.env` | FaceSwap worker, SSH tunnel, and local FaceFusion API |
-| `bot_factories/admin_bot/.env` | Admin Celery worker and its SSH tunnel |
-
-Copy the matching `.env.example` file in each bot directory and fill in its
-credentials. Each launcher loads its own file. To run two echo bots, copy
-`bot_factories/echo_bot/.env.example` to `bot_factories/echo_bot/.env.echo1` and
-`bot_factories/echo_bot/.env.echo2`. Give them separate Telegram tokens and
-local Redis ports. Each bot must use its own Redis broker so its worker only
-consumes that bot's updates. FaceSwap uses local port 6380 by default. Start the workers in separate
-terminals:
+Deploy SQS, Lambda and API Gateway in that order, with the same `ProjectName`
+(default `tgbot-queue`):
 
 ```bash
-./bot_factories/echo_bot/start_worker.sh bot_factories/echo_bot/.env.echo1
-./bot_factories/echo_bot/start_worker.sh bot_factories/echo_bot/.env.echo2
-./bot_factories/faceswap_bot/start_worker.sh
-./bot_factories/admin_bot/start_worker.sh
+aws cloudformation deploy \
+  --region eu-central-1 \
+  --stack-name tgbot-queue-sqs \
+  --template-file deploy/aws/1-sqs-stack.yaml
+
+aws cloudformation deploy \
+  --region eu-central-1 \
+  --stack-name tgbot-queue-lambda \
+  --template-file deploy/aws/2-lambda-stack.yaml \
+  --capabilities CAPABILITY_IAM \
+  --parameter-overrides \
+    WebhookSecretArn=arn:aws:secretsmanager:eu-central-1:ACCOUNT:secret:WEBHOOK
+
+aws cloudformation deploy \
+  --region eu-central-1 \
+  --stack-name tgbot-queue-gateway \
+  --template-file deploy/aws/3-gateway-stack.yaml
 ```
 
-Each bot needs its own gateway deployment, Redis broker, and webhook. The
-gateway publishes `telegram.process_update` to `telegram_updates`.
-The Compose file runs one gateway deployment.
+The admin Lambda validates the webhook secret, then forwards the request body
+to SQS without JSON/schema validation. The admin worker validates the update. The gateway exposes `POST /webhook`; its `WebhookUrl`
+output is used by steps 4 and 6. Function names must be available when creating
+new stacks. The queue and DLQ are retained on stack deletion; Lambda is also
+retained. Review retained resources before recreating stacks.
 
-### Admin bot factory
+### Admin webhook registration: step 4
 
-Copy `bot_factories/admin_bot/.env.example` to `bot_factories/admin_bot/.env`,
-set `ADMIN_BOT_TOKEN`, your numeric `ADMIN_BOT_OWNER_ID`,
-`WEBHOOK_SECRET_TOKEN` from that gateway's `.env`, and the SSH/Redis settings
-for its gateway. `ADMIN_BOT_CHILD_WEBHOOK_URL` must point to that gateway's
-`/webhook/managed` endpoint. Enable Bot Management Mode for the admin bot in
-BotFather. Set the admin bot's webhook to that gateway's `/webhook` endpoint
-with `allowed_updates=["message", "managed_bot", "callback_query"]`. The gateway publishes the
-usual `telegram.process_update` task to `telegram_updates`; the admin worker
-consumes it through its SSH tunnel. Give the admin bot a separate Redis broker
-from other bots because they use the same task name and queue.
+Once the admin worker is ready:
 
-The admin worker and its persistent SQLite database can also run in their own
-Docker Compose project while using the root gateway and Redis; use
-`bot_factories/admin_bot/docker-compose.yml` for that setup. For a local run,
-open the configured SSH tunnel to Redis, load the admin `.env`, and start the
-`bot_factories.admin_bot.celery_app` Celery worker. In
-the admin bot's private chat, **Выбрать пользователя** asks you to choose a
-Telegram user and opens their bot card. If no bot exists, press **Создать бота**
-and enter its initial limit in seconds.
-Confirm managed bot creation yourself with the offered button and keep its
-suggested username. You remain its owner. The admin bot saves the token and
-limit and creates a one-time link to the personal bot. When the recipient opens
-that link, the worker reads their real Telegram ID, restricts the bot to that
-account, and consumes the link. If the user
-already has a saved bot, selecting them shows the existing invitation (or the
-ordinary bot link after activation). For a pending creation, it shows the
-**Продолжить создание** button. **Добавить лимит** on a saved bot's card asks
-for seconds to add. **Все боты** lists saved bots and invitations. Parameters
-and managed bot tokens are stored in
+```bash
+./deploy/aws/4-register-webhook.sh
+```
+
+The script asks for the region, gateway stack and missing token/secret values
+(or reads `ADMIN_BOT_TOKEN` and `WEBHOOK_SECRET_TOKEN` from the environment).
+It registers `message`, `callback_query` and `managed_bot` updates and prints
+Telegram's response. Its prompts are visible input. It does not read Secrets
+Manager or verify `getWebhookInfo`; verify delivery separately.
+
+### AWS admin worker: steps 5 and 6
+
+`deploy/aws/5-admin-bot-worker.yaml` creates infrastructure only: an Ubuntu
+26.04 x86_64 t3.micro, a public subnet with no inbound access by default, Session Manager access, an
+instance role for the existing SQS queue and two Secrets Manager secrets,
+a 24 GiB root disk and a separate encrypted 8 GiB SQLite disk. No HTTP ports,
+Elastic IP, Redis, gateway software or bot process are created on EC2.
+The public IP can change after stop/start; step 6 reads the current stack output.
+
+Create both secrets beforehand. The admin bot SecretString must be a JSON object
+with `ADMIN_BOT_TOKEN` (non-empty token string) and `ADMIN_BOT_OWNER_ID` (positive
+numeric Telegram user ID, as a JSON integer or string). The webhook SecretString
+must be the plain webhook root secret.
+Use the same webhook secret ARN as the Lambda stack. AWS-managed secret keys
+are supported; customer-managed KMS keys require an additional decrypt policy.
+Never put secret values in template parameters or Git.
+
+```bash
+aws cloudformation deploy \
+  --region eu-central-1 \
+  --stack-name tgbot-queue-admin-worker \
+  --template-file deploy/aws/5-admin-bot-worker.yaml \
+  --capabilities CAPABILITY_IAM \
+  --parameter-overrides \
+    KeyName=your-existing-key-pair \
+    AdminBotSecretArn=arn:aws:secretsmanager:eu-central-1:ACCOUNT:secret:ADMIN \
+    WebhookSecretArn=arn:aws:secretsmanager:eu-central-1:ACCOUNT:secret:WEBHOOK
+```
+
+Use the same ProjectName as step 1. The data disk is retained when the stack
+is deleted or the volume is replaced. Retention is not a backup: a recreated
+stack creates a fresh disk; reattaching retained data requires a separate,
+explicit recovery operation. No automated backups are configured.
+
+Deploy a published GitHub branch to EC2 by running step 6 locally:
+
+```bash
+./deploy/aws/6-deploy-admin-bot.sh
+# Git branch [current-local-branch]:
+```
+
+Press Enter to deploy the current local branch, or enter another branch. In a
+detached checkout, enter a branch explicitly. Uncommitted and unpushed changes
+are not deployed. The script fetches the branch from the public GitHub repository
+on EC2 and runs Docker Compose to build and start the worker.
+
+Step 6 installs Git, Docker and Docker Compose on EC2 and enables Docker.
+The step-5 data EBS volume must already be mounted at `/var/lib/admin-bot`.
+The script does not format disks. The current step-5 template does not yet
+mount the disk automatically.
+
+Locally, AWS CLI credentials, Git and Python 3 are required. Optional settings:
+`AWS_REGION` (default `eu-central-1`), `WORKER_STACK` (default
+`tgbot-queue-admin-worker`), `GATEWAY_STACK` (default `tgbot-queue-gateway`).
+The script reads CloudFormation outputs and executes one SSM command. The
+instance must be Online in SSM. No SSH or inbound ports are required.
+
+Runtime settings contain only secret ARNs; the container reads Secrets Manager
+at startup. SQLite stays on the persistent data disk. Each deployment fetches the selected branch directly from GitHub and records
+its commit SHA. That snapshot is extracted into a fresh directory. The worker
+is stopped with `docker compose down` before `docker compose build` and
+`docker compose up`; downtime includes the build and preflight checks. A failed
+build leaves the worker stopped. An existing `admin-bot.service` is disabled
+before the build. Concurrent deployments are rejected by a server-side lock.
+Success requires the running container to use the built image ID, have no
+startup restarts and emit the JSON worker readiness message. The final output
+records the deployed commit and image ID. Branch updates after fetch belong
+to the next deployment. There is no automatic
+rollback. Stop workers on other hosts before the first production deployment.
+
+SSM output may be buffered or truncated. Failures print the SSM command ID.
+Interrupted remote execution may continue; inspect it before retrying. Full
+server logs: `cd /opt/admin-bot && docker compose logs`.
+
+The admin worker consumes raw Telegram JSON from SQS and dispatches it directly
+to aiogram, sequentially. It deletes each message only after successful handling;
+failures remain for retry after the queue visibility timeout and eventually go
+to the DLQ (five receives). Delivery can repeat, including after a successful
+Telegram response if acknowledgement fails. Handlers must finish within the
+queue visibility timeout; this worker does not extend it.
+Readiness means configuration and SQS access passed, not that Telegram flows have
+been verified. Check creation, activation, top-up, duplicate video debit and worker
+restart separately. The admin gateway exposes only `/webhook`. Managed-bot delivery requires the
+separate steps 7–9 and a compatible managed JSON consumer, which is not yet
+implemented. Step 6 currently derives `ADMIN_BOT_CHILD_WEBHOOK_URL` from the
+admin URL by appending `/managed`; this is not the separate managed gateway.
+Wiring the managed gateway output into the worker remains unfinished.
+
+```bash
+# On EC2 through Session Manager:
+cd /opt/admin-bot
+sudo docker compose logs -f
+sudo docker compose restart
+```
+
+### AWS managed webhook ingress: steps 7, 8 and 9
+
+These templates create a separate HTTP API Gateway, Lambda and SQS/DLQ for
+**all** managed bots. They do not change admin resources, deploy a managed
+worker or register Telegram webhooks. Deploy in order in `eu-central-1`:
+
+```bash
+aws cloudformation deploy \
+  --region eu-central-1 \
+  --stack-name tgbot-queue-managed-sqs \
+  --template-file deploy/aws/7-managed-sqs-stack.yaml
+
+aws cloudformation deploy \
+  --region eu-central-1 \
+  --stack-name tgbot-queue-managed-lambda \
+  --template-file deploy/aws/8-managed-lambda-stack.yaml \
+  --capabilities CAPABILITY_IAM \
+  --parameter-overrides \
+    WebhookSecretArn=arn:aws:secretsmanager:eu-central-1:ACCOUNT:secret:WEBHOOK
+
+aws cloudformation deploy \
+  --region eu-central-1 \
+  --stack-name tgbot-queue-managed-gateway \
+  --template-file deploy/aws/9-managed-gateway-stack.yaml
+```
+
+All three default to `ProjectName=tgbot-queue-managed`, keeping queue names and
+CloudFormation exports separate from admin. If overriding it, use the same
+value in all three stacks and a value different from the admin ProjectName.
+The default Lambda name is `managed-to-sqs`; override `FunctionName` if it is
+already used. Use the **same plaintext webhook root secret ARN as the admin
+worker**: managed webhook registration derives each bot's secret from it.
+Customer-managed KMS keys require additional decrypt permissions.
+
+Step 9 outputs `ManagedWebhookBaseUrl`, ending in `/webhook/managed`. Once a
+compatible managed worker is deployed, configure the admin worker's
+`ADMIN_BOT_CHILD_WEBHOOK_URL` with that value. Telegram sends updates to
+`POST /webhook/managed/{bot_id}`. The Lambda validates the per-bot HMAC secret
+and publishes `{"bot_id": 123, "update": {"update_id": 456, ...}}` as raw JSON.
+This is neither a Celery envelope nor an admin queue payload; the existing
+admin JSON worker cannot consume it. Do not switch managed webhooks before
+that consumer is ready. Existing managed bots require explicit webhook
+re-registration; changing the base URL alone does not update Telegram.
+
+SQS retries can deliver duplicates; consumers must handle them. The queues
+are retained on stack deletion, and their default visibility timeout is
+3600 seconds. Logs are retained for 14 days. Gateway and DLQ alarms have no
+notification destinations configured. No end-to-end delivery is established
+by creating these resources alone.
+
+## Admin bot behavior
+
+In the admin bot's private chat, **Выбрать пользователя** opens a selected
+Telegram user's bot card. **Создать бота** asks for an initial limit in seconds.
+Confirm creation using the offered button and keep the suggested username;
+the admin operator remains the bot owner. The repository stores the token,
+limit and one-time invitation. Opening the invitation binds the personal bot
+to the recipient's actual Telegram ID and consumes the link.
+
+Existing cards show the invitation or activated bot link; pending creations
+show **Продолжить создание**. **Добавить лимит** adds seconds, and **Все боты**
+lists saved bots. The default database is
 `bot_factories/admin_bot/.cache/admin.sqlite3`.
-After activation, a personal bot spends its limit by the duration (in whole
-seconds) of each video sent to it. A video is accepted only when its full
-duration fits in the remaining limit; retried Telegram webhook deliveries do
-not spend the limit twice.
 
-## Running the Cloud Gateway
+Managed handlers accept a video only when its entire duration fits the balance
+and guard against repeated debit for a retried update. These handlers exist in
+the Celery path; the AWS managed JSON path still needs its consumer and worker
+configuration before activation/video flows can be verified end to end.
 
-### Without Docker (Debian 13 or Ubuntu)
+## Processing workers
 
-On a fresh Ubuntu 26.04 or Debian 13 server, point your domain at the server
-and allow inbound TCP ports 80 and 443. Create a private `/root/gateway.env`:
+Webhook ingress is deployed through the AWS templates above.
 
-```env
-WEBHOOK_SECRET_TOKEN=replace-with-a-random-secret
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
-REDIS_PASSWORD=replace-with-a-random-password
-```
+### Local Celery workers
 
-Use a password made of letters, digits and common punctuation without spaces.
-Download and run the bootstrap script, passing your real domain and env file:
-
-```sh
-curl -fsSLo bootstrap.sh https://raw.githubusercontent.com/vzimichev/tgbot-queue/codex/cloud-gateway-deploy/deploy/cloud/bootstrap.sh
-sudo bash bootstrap.sh tgbot-queue.duckdns.org /root/gateway.env
-```
-
-The bootstrap adds swap on small machines, installs packages, checks out this
-branch in `/opt/tgbot-queue`, configures local-only Redis, runs
-`deploy/cloud/install.sh`, and configures Nginx and a Let's Encrypt certificate.
-It can be rerun to update the checkout. Pass an email address as a third
-argument if you want certificate expiry notices. The bot token stays on the
-worker machine; configure the Telegram webhook separately after bootstrap.
-No Celery worker is started on the cloud host.
-
-The script uses Python 3.14 on Ubuntu 26.04 and Python 3.13 on Debian 13.
-The lock file includes wheels for both. Ubuntu 24.04 has Python 3.12 by default.
-
-### With Docker
-
-On a fresh Ubuntu server, copy the project to `/opt/tgbot-queue` and create a
-private `.env` there with `WEBHOOK_SECRET_TOKEN`, `REDIS_PASSWORD`,
-`REDIS_HOST=redis`, and `REDIS_PORT=6379`. Point the domain at the server, then run:
+Configure the bot token and an existing SQS task queue in the bot's env file:
 
 ```bash
-sudo bash deploy/docker/install.sh your-domain.example
-```
-
-The installer adds swap on small VMs, installs Docker and Certbot, starts the
-FastAPI gateway, Redis, and Nginx, and obtains a Let's Encrypt certificate.
-Certificate renewal reloads Nginx automatically. Redis is exposed only on the
-server's loopback interface for the local worker's SSH tunnel. The gateway uses
-Celery to publish tasks to Redis; the bot worker runs on your own machine.
-
-View logs:
-
-``` bash
-docker compose logs -f
-```
-
-Stop containers without deleting Redis data:
-
-``` bash
-docker compose down
-```
-
-## Running the Worker
-
-Run your local worker that contains the **aiogram bot handlers** and executes heavy processing:
-
-``` bash
 ./bot_factories/echo_bot/start_worker.sh
-```
-The echo launcher loads its selected env file, opens an SSH tunnel to the
-server's Redis, and starts the Celery worker. Stop it with Ctrl+C. The cloud
-instance receives webhooks and publishes updates to the shared queue.
-
-## Setting the Telegram Webhook
-
-After the cloud gateway is online, point your bot to it:
-
-``` bash
-curl -X POST "https://api.telegram.org/bot<token>/setWebhook" \
-  -d "url=https://your_domain/webhook" \
-  -d "secret_token=<WEBHOOK_SECRET_TOKEN>"
+./bot_factories/faceswap_bot/start_worker.sh
 ```
 
-Webhook endpoint:
+For multiple echo bots, pass a separate env file to each launcher.
+Use separate task queues per independent bot deployment. Raw JSON ingress
+queues cannot be consumed by Celery workers.
+
+### Celery broker configuration
+
+Celery uses SQS and does not store task results. Configure the task producer
+and worker with matching queue settings:
+
+```dotenv
+CELERY_BROKER=sqs
+SQS_REGION=eu-central-1
+SQS_QUEUE_NAME=telegram_updates
+SQS_QUEUE_URL=https://sqs.eu-central-1.amazonaws.com/123456789012/telegram_updates
+SQS_POLLING_INTERVAL=1
+SQS_VISIBILITY_TIMEOUT=3600
 ```
-https://your-domain.com/webhook
+
+The queue must already exist: `SQS_QUEUE_URL` is mandatory and registered as
+a predefined Kombu queue. AWS clients use the standard credential provider
+chain (local profile/environment or instance role). Grant the gateway
+`sqs:SendMessage`; workers need receive/delete/change-visibility permissions
+and queue attribute access as needed. Scope permissions to the queue ARN.
+
+SQS delivery can repeat. Set queue visibility above the longest job with a
+margin; it is limited to 12 hours. Late acknowledgement alone does not ensure
+retry after every Celery handler exception. Verify task retry behavior and
+duplicate handling for the chosen worker.
+
+### Admin Docker
+
+`bot_factories/admin_bot/Dockerfile` starts the raw JSON SQS worker.
+Use AWS step 6 to deploy it. The admin bot does not run a Celery app.
+
+## Custom bots and verification
+
+Add a package in `bot_factories/` with routes, configuration, launch scripts
+and bot-specific tests. For the Celery path, create an app through
+`CeleryFactory.create_app(router=your_router)` and isolate its gateway/queue.
+The shared modules provide dispatch and configuration; service-specific work
+belongs in the bot package. An AWS JSON consumer requires a matching payload
+contract rather than a Celery task app.
+
+Run focused checks with the installed development/test dependencies:
+
+```bash
+.venv/bin/python -m unittest discover -s deploy/aws/tests -q
+.venv/bin/pytest bot_factories/admin_bot/tests/test_json_worker.py
 ```
 
-## Custom Bots
+The FaceSwap integration test requires a running local FaceFusion HTTP service
+and ignored media fixtures under `bot_factories/faceswap_bot/tests/data/`:
 
-To create a custom bot:
-
-1. Add a package inside `bot_factories/`.
-2. Keep its routes, service configuration, launch scripts, and specific tests in that package.
-3. Create a Celery app using `CeleryFactory.create_app(router=your_router)`.
-4. Give this bot its own gateway deployment and Redis broker.
-
-The shared gateway and worker modules contain no service-specific processing code.
-
-The FaceSwap integration test is opt-in because it requires a running local
-FaceFusion HTTP service and ignored media fixtures under
-`bot_factories/faceswap_bot/tests/data/`:
-
-``` bash
+```bash
 RUN_FACESWAP_INTEGRATION=1 .venv/bin/pytest bot_factories/faceswap_bot/tests/test_integration.py
 ```
+
+Local tests do not verify deployed Telegram/AWS integration. See the migration
+plan for the remaining delivery, persistence and recovery checks.
 
 ## License
 

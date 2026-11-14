@@ -1,0 +1,5 @@
+from bot_factories.admin_bot.routes.admin_bot import admin_router
+from worker.celery_factory import CeleryFactory
+
+celery_app = CeleryFactory.create_app(router=admin_router)
+celery_app.conf.imports = ("bot_factories.managed_bot.tasks",)

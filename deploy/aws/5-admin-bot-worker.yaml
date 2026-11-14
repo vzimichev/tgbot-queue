@@ -1,0 +1,212 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Admin bot worker infrastructure only. Run step 6 locally to deploy the application.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key pair allowed to SSH to the worker host.
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.micro
+    Description: x86_64 instance size for the single admin worker.
+  ProjectName:
+    Type: String
+    Default: tgbot-queue
+    AllowedPattern: ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$
+    Description: Value assigned to the Project tag on all stack resources.
+  AdminBotSecretArn:
+    Type: String
+    Description: Existing Secrets Manager ARN containing JSON with ADMIN_BOT_TOKEN and ADMIN_BOT_OWNER_ID.
+  WebhookSecretArn:
+    Type: String
+    Description: Existing Secrets Manager ARN containing the plain webhook root secret.
+  ImageId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/26.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-vpc
+        - Key: Project
+          Value: !Ref ProjectName
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-igw
+        - Key: Project
+          Value: !Ref ProjectName
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref Vpc
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-public
+        - Key: Project
+          Value: !Ref ProjectName
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      CidrBlock: 10.42.0.0/24
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-public-a
+        - Key: Project
+          Value: !Ref ProjectName
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+
+  WorkerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Session Manager administration; no inbound access by default.
+      SecurityGroupIngress: []
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-admin-worker
+        - Key: Project
+          Value: !Ref ProjectName
+
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: worker-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:ChangeMessageVisibility
+                  - sqs:GetQueueAttributes
+                Resource:
+                  Fn::ImportValue: !Sub ${ProjectName}-QueueArn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref AdminBotSecretArn
+                  - !Ref WebhookSecretArn
+  WorkerProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref WorkerRole]
+  WorkerInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: [DefaultPublicRoute, PublicSubnetRouteTableAssociation]
+    Properties:
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -euxo pipefail
+          if ! snap list amazon-ssm-agent >/dev/null 2>&1; then
+            snap install amazon-ssm-agent --classic
+          fi
+          snap start --enable amazon-ssm-agent
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref WorkerProfile
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds: [!Ref WorkerSecurityGroup]
+      MetadataOptions:
+        HttpTokens: required
+        HttpPutResponseHopLimit: 2
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            Encrypted: true
+            DeleteOnTermination: true
+            VolumeSize: 24
+            VolumeType: gp3
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-admin-worker
+  DataVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AvailabilityZone: !GetAtt PublicSubnet.AvailabilityZone
+      Encrypted: true
+      Size: 8
+      VolumeType: gp3
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-admin-data
+  DataAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      Device: /dev/sdf
+      InstanceId: !Ref WorkerInstance
+      VolumeId: !Ref DataVolume
+Outputs:
+  InstanceId:
+    Value: !Ref WorkerInstance
+  PublicIp:
+    Value: !GetAtt WorkerInstance.PublicIp
+  DataVolumeId:
+    Value: !Ref DataVolume
+  QueueUrl:
+    Value:
+      Fn::ImportValue: !Sub ${ProjectName}-QueueUrl
+  AdminBotSecretArn:
+    Value: !Ref AdminBotSecretArn
+  WebhookSecretArn:
+    Value: !Ref WebhookSecretArn
+  WorkerSecurityGroupId:
+    Value: !Ref WorkerSecurityGroup
+  SshCommand:
+    Value: !Sub ssh -i /path/to/${KeyName}.pem ubuntu@${WorkerInstance.PublicIp}

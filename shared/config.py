@@ -9,10 +9,13 @@ class Settings(BaseSettings):
     telegram_token: Optional[str] = None
     webhook_secret_token: Optional[str] = None
 
-    # Redis
-    redis_host: str = "redis"
-    redis_port: int = 6379
-    redis_password: Optional[str] = None
+    # Celery uses the AWS SDK credential provider chain.
+    celery_broker: str = "sqs"
+    sqs_region: Optional[str] = None
+    sqs_queue_name: str = "telegram_updates"
+    sqs_queue_url: Optional[str] = None
+    sqs_polling_interval: float = 1.0
+    sqs_visibility_timeout: int = 3600
 
     telegram_request_timeout: float = 600.0
 

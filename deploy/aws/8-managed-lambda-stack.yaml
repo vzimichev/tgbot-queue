@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Managed Telegram-to-SQS Lambda with inline Python code; no build required.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: tgbot-queue-managed
+    AllowedPattern: ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$
+    Description: Must match ProjectName of the SQS stack in this account and region.
+  FunctionName:
+    Type: String
+    Default: managed-to-sqs
+    Description: Must be unused for a new stack; existing functions require a separate resource import.
+  WebhookSecretArn:
+    Type: String
+    Description: Full ARN of the existing webhook secret; SecretString is the same plain root secret used by the admin worker, not JSON.
+
+Resources:
+  LambdaLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${FunctionName}
+      RetentionInDays: 14
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: telegram-webhook-publish
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource:
+                  Fn::ImportValue: !Sub ${ProjectName}-QueueArn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref WebhookSecretArn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt LambdaLogs.Arn
+
+  WebhookFunction:
+    Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      FunctionName: !Ref FunctionName
+      Description: Receives Telegram webhooks, validates the webhook secret, and publishes bot_id and update as JSON to the managed SQS queue.
+      Runtime: python3.12
+      Architectures:
+        - x86_64
+      Handler: index.handler
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 25
+      MemorySize: 128
+      LoggingConfig:
+        LogGroup: !Ref LambdaLogs
+      Environment:
+        Variables:
+          SQS_QUEUE_URL:
+            Fn::ImportValue: !Sub ${ProjectName}-QueueUrl
+          WEBHOOK_SECRET_ARN: !Ref WebhookSecretArn
+      Code:
+        ZipFile: |
+          import base64
+          import hashlib
+          import hmac
+          import json
+          import logging
+          import os
+          
+          import boto3
+          
+          
+          logger = logging.getLogger(__name__)
+          sqs = boto3.client("sqs")
+          
+          QUEUE_URL = os.environ["SQS_QUEUE_URL"]
+          WEBHOOK_SECRET = boto3.client("secretsmanager").get_secret_value(
+              SecretId=os.environ["WEBHOOK_SECRET_ARN"]
+          )["SecretString"].encode("utf-8")
+          
+          
+          def handler(event, context):
+              raw_bot_id = (event.get("pathParameters") or {}).get("bot_id", "")
+              if not isinstance(raw_bot_id, str) or not raw_bot_id.isascii() or not raw_bot_id.isdecimal():
+                  return {"statusCode": 400, "body": "Invalid bot ID"}
+              bot_id = int(raw_bot_id)
+              if bot_id <= 0:
+                  return {"statusCode": 400, "body": "Invalid bot ID"}
+
+              headers = {
+                  key.lower(): value
+                  for key, value in (event.get("headers") or {}).items()
+              }
+              supplied_secret = headers.get(
+                  "x-telegram-bot-api-secret-token", ""
+              ).encode("utf-8")
+          
+              expected_secret = hmac.new(
+                  WEBHOOK_SECRET, str(bot_id).encode("utf-8"), hashlib.sha256
+              ).hexdigest().encode("utf-8")
+              if not WEBHOOK_SECRET or not hmac.compare_digest(supplied_secret, expected_secret):
+                  return {"statusCode": 403, "body": "Forbidden"}
+          
+              body = event.get("body") or ""
+              try:
+                  if event.get("isBase64Encoded"):
+                      body = base64.b64decode(body, validate=True).decode("utf-8")
+                  update = json.loads(body)
+                  if not isinstance(update, dict) or type(update.get("update_id")) is not int:
+                      raise ValueError("Invalid update")
+              except (ValueError, TypeError, UnicodeError):
+                  return {"statusCode": 400, "body": "Invalid update"}
+          
+              try:
+                  sqs.send_message(
+                      QueueUrl=QUEUE_URL,
+                      MessageBody=json.dumps({"bot_id": bot_id, "update": update}),
+                  )
+              except Exception:
+                  logger.exception("Failed to send message to SQS")
+                  return {"statusCode": 503, "body": "Queue unavailable"}
+          
+              return {"statusCode": 200, "body": "OK"}
+
+Outputs:
+  WebhookFunctionArn:
+    Value: !GetAtt WebhookFunction.Arn
+    Export:
+      Name: !Sub ${ProjectName}-WebhookFunctionArn
+  WebhookFunctionName:
+    Value: !Ref WebhookFunction
+  LambdaRoleArn:
+    Value: !GetAtt LambdaRole.Arn

@@ -12,11 +12,66 @@ from worker.celery_factory import (
 
 
 class CeleryFactoryTest(unittest.TestCase):
+    def setUp(self):
+        for name, value in {
+            "celery_broker": "sqs",
+            "sqs_region": "eu-central-1",
+            "sqs_queue_url": "https://sqs.eu-central-1.amazonaws.com/123456789012/telegram_updates",
+        }.items():
+            patcher = patch.object(settings, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_producer_does_not_create_telegram_runtime(self):
         app = CeleryFactory.create_app()
 
         self.assertFalse(hasattr(app, "bot"))
         self.assertFalse(hasattr(app, "dp"))
+
+    def test_unsupported_broker_is_rejected(self):
+        with patch.object(settings, "celery_broker", "unsupported"):
+            with self.assertRaisesRegex(ValueError, "CELERY_BROKER must be 'sqs'"):
+                CeleryFactory.create_app()
+
+    def test_sqs_uses_existing_queue_without_a_result_backend(self):
+        with (
+            patch.object(settings, "celery_broker", "sqs"),
+            patch.object(settings, "sqs_region", "eu-central-1"),
+            patch.object(settings, "sqs_queue_name", "telegram_updates"),
+            patch.object(
+                settings,
+                "sqs_queue_url",
+                "https://sqs.eu-central-1.amazonaws.com/123456789012/telegram_updates",
+            ),
+            patch.object(settings, "sqs_polling_interval", 2.0),
+            patch.object(settings, "sqs_visibility_timeout", 7200),
+        ):
+            app = CeleryFactory.create_app()
+
+        self.assertEqual(app.conf.broker_url, "sqs://")
+        self.assertIsNone(app.conf.result_backend)
+        self.assertTrue(app.conf.task_ignore_result)
+        self.assertEqual(
+            app.conf.broker_transport_options,
+            {
+                "region": "eu-central-1",
+                "polling_interval": 2.0,
+                "visibility_timeout": 7200,
+                "wait_time_seconds": 20,
+                "predefined_queues": {
+                    "telegram_updates": {
+                        "url": "https://sqs.eu-central-1.amazonaws.com/123456789012/telegram_updates"
+                    }
+                },
+            },
+        )
+
+    def test_sqs_requires_region_and_existing_queue_url(self):
+        with patch.object(settings, "celery_broker", "sqs"), patch.object(
+            settings, "sqs_region", None
+        ), patch.object(settings, "sqs_queue_url", None):
+            with self.assertRaisesRegex(ValueError, "SQS_REGION and SQS_QUEUE_URL"):
+                CeleryFactory.create_app()
 
     def test_worker_registers_shared_task_and_queue(self):
         with patch.object(settings, "telegram_token", "123456:ABCDEF"):
