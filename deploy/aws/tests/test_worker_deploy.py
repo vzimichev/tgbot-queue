@@ -49,13 +49,18 @@ if 'cloudformation' in args:
         print(json.dumps({'Stacks': [{'Outputs': [{'OutputKey': 'WebhookUrl',
               'OutputValue': 'https://example.execute-api.eu-central-1.amazonaws.com/webhook'}]}]}))
 elif 'describe-instance-information' in args:
-    print(json.dumps({'InstanceInformationList': [{'PingStatus': os.environ.get('MOCK_SSM', 'Online')}]}))
+    status = os.environ.get('MOCK_SSM', 'Online')
+    if '--query' in args:
+        print(status)
+    else:
+        print(json.dumps({'InstanceInformationList': [{'PingStatus': status}]}))
 elif 'send-command' in args:
     command = json.loads(args[args.index('--parameters') + 1])['commands'][0]
     log = root / 'ssm_calls'
     count = int(log.read_text()) + 1 if log.exists() else 1
     log.write_text(str(count))
-    (root / 'command').write_text(command)
+    kind = 'inspect' if 'Expected exactly one EBS device' in command else 'deploy'
+    (root / ('command-' + kind)).write_text(command)
     if "printf '%s'" in command:
         chunk = command.split("'", 4)[3]
         offset = int(re.search(r'seek=(\\d+)', command).group(1))
@@ -65,9 +70,14 @@ elif 'send-command' in args:
     if command.startswith('set -e; base64'):
         (root / 'upload.tgz').write_bytes(base64.b64decode((root / 'upload.b64').read_bytes()))
         (root / 'deployment_command').write_text(command)
-    print(json.dumps({'Command': {'CommandId': 'command-' + str(count)}}))
+    print(json.dumps({'Command': {'CommandId': kind + '-' + str(count)}}))
 elif 'get-command-invocation' in args:
-    command = (root / 'command').read_text()
+    command_id = args[args.index('--command-id') + 1]
+    if command_id.startswith('inspect-'):
+        output = os.environ.get('MOCK_VOLUME_STATE', '{"device":"/dev/nvme1n1","fstype":"","mountpoint":""}')
+        print(json.dumps({'Status': 'Success', 'StandardOutputContent': output}))
+        sys.exit(0)
+    command = (root / 'command-deploy').read_text()
     status = 'Failed' if os.environ.get('MOCK_FAILURE') else 'Success'
     output = '' if os.environ.get('MOCK_NO_READY') else 'DEPLOY_OK commit=abc image=sha256:abc\\n'
     print(json.dumps({'Status': status, 'StandardOutputContent': output}))
@@ -82,18 +92,18 @@ else:
 
     def run_script(self, *args, input_text=None):
         return subprocess.run(['bash', str(self.script), *args], env=self.env,
-                              capture_output=True, text=True, input='\n' if input_text is None else input_text)
+                              capture_output=True, text=True, input='\nFORMAT\n' if input_text is None else input_text)
 
     def test_enter_deploys_current_branch_in_one_command(self):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
-        command = (self.root / 'command').read_text()
+        command = (self.root / 'command-deploy').read_text()
         self.assertIn('ref=test-branch', command)
         self.assertIn('https://github.com/vzimichev/tgbot-queue.git', command)
         self.assertIn('docker compose up -d', command)
         self.assertIn('apt-get install -y -qq git docker.io docker-compose-v2', command)
         self.assertLess(command.index('apt-get install'), command.index('docker compose build'))
-        self.assertEqual((self.root / 'ssm_calls').read_text(), '1')
+        self.assertEqual((self.root / 'ssm_calls').read_text(), '2')
         subprocess.run(['bash', '-n'], input=command, text=True, check=True)
 
     def test_success_without_readiness_is_rejected(self):
@@ -105,7 +115,7 @@ else:
     def test_downtime_order_and_release_verification(self):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
-        command = (self.root / 'command').read_text()
+        command = (self.root / 'command-deploy').read_text()
         steps = ['git -C repo fetch', 'git -C repo archive', 'docker compose down',
                  'docker compose build', 'docker compose run --interactive=false -T',
                  'docker compose up -d', 'actual_image=$(docker inspect', 'DEPLOY_OK commit=']
@@ -117,9 +127,9 @@ else:
         self.assertIn('flock -n 9', command)
 
     def test_explicit_branch_overrides_current_branch(self):
-        result = self.run_script(input_text='feature/deploy\n')
+        result = self.run_script(input_text='feature/deploy\nFORMAT\n')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('ref=feature/deploy', (self.root / 'command').read_text())
+        self.assertIn('ref=feature/deploy', (self.root / 'command-deploy').read_text())
 
     def test_invalid_branch_never_sends_command(self):
         result = self.run_script(input_text='--bad\n')
@@ -136,8 +146,8 @@ else:
         self.env['MOCK_FAILURE'] = '1'
         result = self.run_script()
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual((self.root / 'ssm_calls').read_text(), '1')
-        self.assertIn('command-1', result.stderr)
+        self.assertEqual((self.root / 'ssm_calls').read_text(), '2')
+        self.assertIn('deploy-2', result.stderr)
 
     def test_incomplete_stack_never_sends_commands(self):
         self.env['MOCK_STATUS'] = 'CREATE_IN_PROGRESS'
@@ -149,6 +159,28 @@ else:
         result = self.run_script('0')
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.root / 'ssm_calls').exists())
+
+    def test_empty_volume_requires_explicit_format_confirmation(self):
+        result = self.run_script(input_text='\nno\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('volume was not formatted', result.stderr)
+        self.assertEqual((self.root / 'ssm_calls').read_text(), '1')
+        self.assertFalse((self.root / 'command-deploy').exists())
+
+    def test_existing_filesystem_is_mounted_without_formatting(self):
+        self.env['MOCK_VOLUME_STATE'] = '{"device":"/dev/nvme1n1","fstype":"ext4","mountpoint":""}'
+        result = self.run_script(input_text='\ny\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        command = (self.root / 'command-deploy').read_text()
+        self.assertIn('volume_mode=mount', command)
+        self.assertIn('[[ -n "$fstype" ]]', command)
+
+    def test_volume_mounted_elsewhere_is_rejected_before_deployment(self):
+        self.env['MOCK_VOLUME_STATE'] = '{"device":"/dev/nvme1n1","fstype":"ext4","mountpoint":"/mnt/data"}'
+        result = self.run_script(input_text='\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('already mounted at /mnt/data', result.stderr)
+        self.assertEqual((self.root / 'ssm_calls').read_text(), '1')
 
 
 class WorkerSecretTests(unittest.TestCase):

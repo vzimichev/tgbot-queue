@@ -80,8 +80,88 @@ managed_config = {
 PY
 instance=$(cat "$tmp/instance")
 volume=$(cat "$tmp/volume")
+online=$(aws ssm describe-instance-information --region "$region" --filters "Key=InstanceIds,Values=$instance" --query 'InstanceInformationList[0].PingStatus' --output text --no-cli-pager)
+[[ "$online" == Online ]] || { echo 'Worker must be Online in SSM before volume inspection.' >&2; exit 1; }
+python3 - "$tmp" "$region" "$instance" "$volume" <<'INSPECT_PY'
+import json
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+root, region, instance, volume = sys.argv[1:]
+probe = f'''python3 - {volume!r} <<'PY'
+import json, subprocess, sys
+serial = sys.argv[1].replace('-', '')
+rows = []
+for line in subprocess.check_output(['lsblk', '-dn', '-o', 'PATH,SERIAL,FSTYPE'], text=True).splitlines():
+    parts = line.split(None, 2)
+    if len(parts) >= 2 and parts[1] == serial:
+        device = parts[0]
+        fstype = parts[2] if len(parts) == 3 else ''
+        mount = subprocess.run(['findmnt', '-n', '-o', 'TARGET', '--source', device], text=True, capture_output=True).stdout.strip()
+        rows.append({{'device': device, 'fstype': fstype, 'mountpoint': mount}})
+if len(rows) != 1:
+    raise SystemExit('Expected exactly one EBS device for the stack data volume')
+print(json.dumps(rows[0]))
+PY'''
+
+def aws(*args):
+    result = subprocess.run(['aws', 'ssm', *args, '--region', region, '--output', 'json', '--no-cli-pager'], capture_output=True, text=True)
+    if result.returncode:
+        raise SystemExit('Unable to inspect the EC2 data volume through SSM.')
+    return json.loads(result.stdout)
+
+response = aws('send-command', '--instance-ids', instance, '--document-name', 'AWS-RunShellScript', '--parameters', json.dumps({'commands': [probe]}))
+command_id = response['Command']['CommandId']
+for _ in range(30):
+    result = aws('get-command-invocation', '--command-id', command_id, '--instance-id', instance)
+    if result['Status'] == 'Success':
+        try:
+            state = json.loads(result['StandardOutputContent'])
+        except (KeyError, json.JSONDecodeError) as error:
+            raise SystemExit('EC2 returned an invalid data-volume state.') from error
+        Path(root, 'volume-state.json').write_text(json.dumps(state))
+        break
+    if result['Status'] not in ('Pending', 'InProgress', 'Delayed'):
+        raise SystemExit('Unable to inspect the EC2 data volume through SSM.')
+    time.sleep(2)
+else:
+    raise SystemExit('Timed out while inspecting the EC2 data volume.')
+INSPECT_PY
+volume_state=$(python3 - "$tmp/volume-state.json" <<'PY'
+import json, sys
+state = json.load(open(sys.argv[1]))
+print(f"device={state['device']} filesystem={state['fstype'] or 'none'} mountpoint={state['mountpoint'] or 'none'}")
+PY
+)
+echo "Data volume $volume: $volume_state"
+mountpoint=$(python3 - "$tmp/volume-state.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))['mountpoint'])
+PY
+)
+fstype=$(python3 - "$tmp/volume-state.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))['fstype'])
+PY
+)
+if [[ -n "$mountpoint" && "$mountpoint" != /var/lib/admin-bot ]]; then
+  echo "Data volume is already mounted at $mountpoint; refusing to move it." >&2
+  exit 1
+elif [[ "$mountpoint" == /var/lib/admin-bot ]]; then
+  volume_mode=mounted
+elif [[ -z "$fstype" ]]; then
+  read -r -p "Empty data volume. Type FORMAT to create an ext4 filesystem: " answer
+  [[ "$answer" == FORMAT ]] || { echo 'Deployment cancelled; volume was not formatted.' >&2; exit 1; }
+  volume_mode=format
+else
+  read -r -p "Mount existing $fstype filesystem at /var/lib/admin-bot? [y/N]: " answer
+  [[ "$answer" =~ ^[Yy]$ ]] || { echo 'Deployment cancelled; volume was not mounted.' >&2; exit 1; }
+  volume_mode=mount
+fi
 # Deploy directly through SSM; no application archive is uploaded.
-python3 - "$tmp" "$region" "$instance" "$volume" "$branch" <<'DEPLOY_PY'
+python3 - "$tmp" "$region" "$instance" "$volume" "$branch" "$volume_mode" <<'DEPLOY_PY'
 import base64
 import json
 from pathlib import Path
@@ -92,20 +172,43 @@ import time
 
 
 def main():
-    temporary, region, instance, volume, branch = sys.argv[1:]
+    temporary, region, instance, volume, branch, volume_mode = sys.argv[1:]
     config = base64.b64encode((Path(temporary) / 'runtime.json').read_bytes()).decode()
     remote = r"""set -euo pipefail
 install -d -m 0755 /opt/admin-bot
 exec 9>/opt/admin-bot/deploy.lock
 flock -n 9 || { echo 'Another deployment is running.' >&2; exit 1; }
+serial="${volume//-/}"
+device=$(lsblk -dn -o PATH,SERIAL | awk -v serial="$serial" '$2 == serial { print $1 }')
+[[ -n "$device" ]] || { echo 'Expected data volume is not attached.' >&2; exit 1; }
+[[ $(wc -l <<< "$device") -eq 1 ]] || { echo 'Expected exactly one data-volume device.' >&2; exit 1; }
+fstype=$(lsblk -dn -o FSTYPE "$device")
+if mountpoint -q /var/lib/admin-bot; then
+  mounted_device=$(findmnt -n -o SOURCE --target /var/lib/admin-bot)
+  mounted_serial=$(lsblk -dn -o SERIAL "$mounted_device")
+  [[ "$mounted_serial" == "$serial" ]] || { echo 'Unexpected database disk; refusing to deploy.' >&2; exit 1; }
+else
+  case "$volume_mode" in
+    format)
+      [[ -z "$fstype" ]] || { echo 'Refusing to format a volume with an existing filesystem.' >&2; exit 1; }
+      mkfs.ext4 -F "$device"
+      ;;
+    mount)
+      [[ -n "$fstype" ]] || { echo 'Refusing to mount an unformatted volume.' >&2; exit 1; }
+      ;;
+    *) echo 'Data volume is not mounted.' >&2; exit 1 ;;
+  esac
+  install -d -m 0700 /var/lib/admin-bot
+  uuid=$(blkid -s UUID -o value "$device")
+  grep -Fqx "UUID=$uuid /var/lib/admin-bot ext4 defaults,nofail 0 2" /etc/fstab || echo "UUID=$uuid /var/lib/admin-bot ext4 defaults,nofail 0 2" >> /etc/fstab
+  mount /var/lib/admin-bot
+fi
+mountpoint -q /var/lib/admin-bot || { echo 'Database disk was not mounted.' >&2; exit 1; }
 echo 'Installing Git and Docker Compose...'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq git docker.io docker-compose-v2
 systemctl enable --now docker
-mountpoint -q /var/lib/admin-bot || { echo 'Mount the database disk at /var/lib/admin-bot first.' >&2; exit 1; }
-serial=$(lsblk -dn -o SERIAL "$(findmnt -n -o SOURCE --target /var/lib/admin-bot)")
-[[ "$serial" == "${volume//-/}" ]] || { echo 'Unexpected database disk; refusing to deploy.' >&2; exit 1; }
 install -d -m 0755 /opt/admin-bot
 install -d -m 0700 /var/lib/admin-bot/db
 cd /opt/admin-bot
@@ -153,7 +256,6 @@ if sys.argv[1:] == ['--check']:
 os.execvp(sys.executable, [sys.executable, '-m', 'bot_factories.admin_bot.json_worker'])
 START_PY
 cd /opt/admin-bot
-mountpoint -q /var/lib/admin-bot || { echo 'Database disk is not mounted.' >&2; exit 1; }
 echo "Downloading GitHub version: $ref"
 if [[ ! -d repo/.git ]]; then
   git clone --no-checkout https://github.com/vzimichev/tgbot-queue.git repo
@@ -233,7 +335,7 @@ echo 'Worker did not become ready. Inspect: cd /opt/admin-bot && docker compose 
 exit 1
 """
     # Only non-secret configuration is sent through SSM.
-    prefix = f'ref={shlex.quote(branch)}\nvolume={shlex.quote(volume)}\n'
+    prefix = f'ref={shlex.quote(branch)}\nvolume={shlex.quote(volume)}\nvolume_mode={shlex.quote(volume_mode)}\n'
     insert = f'umask 077; echo {config} | base64 -d > /opt/admin-bot/runtime.json\n'
     remote = prefix + remote.replace("cat > start.py", insert + "cat > start.py", 1)
     online = aws(region, 'describe-instance-information', '--filters', f'Key=InstanceIds,Values={instance}')

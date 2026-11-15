@@ -51,7 +51,7 @@ contracts. Do not connect a Celery worker to the raw JSON ingress queues.
 - Python 3.13 or 3.14 and Poetry for application development.
 - A Telegram bot token; enable Bot Management Mode in BotFather for the admin bot.
 - AWS CLI credentials and an existing EC2 key pair for AWS deployment.
-- Docker/Compose on the application host (step 6 installs them on EC2).
+- Docker/Compose on the application host (step 9 installs them on EC2).
 - A domain and HTTPS certificate for the alternative Docker/Nginx gateway.
   AWS ingress uses the API Gateway HTTPS domain instead.
 
@@ -123,7 +123,7 @@ Manager or verify `getWebhookInfo`; verify delivery separately.
 instance role for the existing SQS queue and two Secrets Manager secrets,
 a 24 GiB root disk and a separate encrypted 8 GiB SQLite disk. No HTTP ports,
 Elastic IP, Redis, gateway software or bot process are created on EC2.
-The public IP can change after stop/start; step 6 reads the current stack output.
+The public IP can change after stop/start; step 9 reads the current stack output.
 
 Create both secrets beforehand. The admin bot SecretString must be a JSON object
 with `ADMIN_BOT_TOKEN` (non-empty token string) and `ADMIN_BOT_OWNER_ID` (positive
@@ -150,7 +150,7 @@ is deleted or the volume is replaced. Retention is not a backup: a recreated
 stack creates a fresh disk; reattaching retained data requires a separate,
 explicit recovery operation. No automated backups are configured.
 
-Deploy a published GitHub branch to EC2 by running step 6 locally:
+Deploy a published GitHub branch to EC2 by running step 9 locally:
 
 ```bash
 ./deploy/aws/9-deploy-ec2-worker.sh
@@ -162,10 +162,13 @@ detached checkout, enter a branch explicitly. Uncommitted and unpushed changes
 are not deployed. The script fetches the branch from the public GitHub repository
 on EC2 and runs Docker Compose to build and start the worker.
 
-Step 6 installs Git, Docker and Docker Compose on EC2 and enables Docker.
-The step-5 data EBS volume must already be mounted at `/var/lib/admin-bot`.
-The script does not format disks. The current step-5 template does not yet
-mount the disk automatically.
+Step 9 first inspects the exact data volume through SSM and prints its device,
+filesystem and mountpoint. A blank volume is formatted as ext4 only after the
+operator types `FORMAT`; an existing filesystem is only mounted after a `y`
+confirmation. The script rejects a volume mounted anywhere other than
+`/var/lib/admin-bot`, records the UUID in `/etc/fstab`, then installs Git,
+Docker and Docker Compose. Declining either prompt exits before any Docker
+command runs.
 
 Locally, AWS CLI credentials, Git and Python 3 are required. Optional settings:
 `AWS_REGION` (default `eu-central-1`), `WORKER_STACK` (default
@@ -325,7 +328,7 @@ duplicate handling for the chosen worker.
 ### Admin Docker
 
 `bot_factories/admin_bot/Dockerfile` starts the raw JSON SQS worker.
-Use AWS step 6 to deploy it. The admin bot does not run a Celery app.
+Use AWS step 9 to deploy it. The admin bot does not run a Celery app.
 
 ## Custom bots and verification
 
