@@ -17,14 +17,15 @@ managed bot tokens, invitations and limits in SQLite on a separate EBS volume.
 Lambda code lives directly in the CloudFormation templates: no Lambda ZIP
 build, SAM or CodeBuild is required.
 
-Managed bots have separate ingress templates:
+Managed bots use a separate ingress and worker:
 
 ```text
-Telegram → managed HTTP API Gateway → inline Lambda → managed SQS
+Telegram → managed HTTP API Gateway → inline Lambda → managed SQS → managed JSON worker → aiogram
 ```
 
-The managed JSON consumer and its connection to processing workers are still
-unfinished. Creating the managed ingress does not establish end-to-end delivery.
+The managed worker runs as a separate Docker service on the admin EC2 instance.
+Both services share the SQLite control-plane database on its dedicated EBS volume;
+they never consume each other's queues.
 The target architecture is recorded in [flow.mmd](deploy/aws/flow.mmd);
 implementation status and remaining work are in
 [the migration plan](deploy/aws/MIGRATION_PLAN.md).
@@ -39,7 +40,9 @@ contracts. Do not connect a Celery worker to the raw JSON ingress queues.
 | `deploy/aws/` | Numbered CloudFormation templates, registration/deployment scripts and migration status |
 | `worker/` | Shared Celery factory and task dispatch |
 | `shared/` | Settings, webhook secrets and HTTP job client |
-| `bot_factories/admin_bot/` | Admin/managed bot routes, SQLite repositories and admin JSON worker |
+| `bot_factories/managed_bots/admin/` | Owner-only admin routes and admin JSON worker |
+| `bot_factories/managed_bots/managed/` | Managed-bot routes and managed JSON worker |
+| `bot_factories/managed_bots/shared/` | Shared managed-bot lifecycle, ledger and SQLite persistence |
 | `bot_factories/echo_bot/` | Echo Celery bot |
 | `bot_factories/faceswap_bot/` | FaceSwap Celery bot and FaceFusion integration |
 
@@ -48,7 +51,7 @@ contracts. Do not connect a Celery worker to the raw JSON ingress queues.
 - Python 3.13 or 3.14 and Poetry for application development.
 - A Telegram bot token; enable Bot Management Mode in BotFather for the admin bot.
 - AWS CLI credentials and an existing EC2 key pair for AWS deployment.
-- Docker/Compose on the application host (step 6 installs them on EC2).
+- Docker/Compose on the application host (step 9 installs them on EC2).
 - A domain and HTTPS certificate for the alternative Docker/Nginx gateway.
   AWS ingress uses the API Gateway HTTPS domain instead.
 
@@ -113,14 +116,14 @@ It registers `message`, `callback_query` and `managed_bot` updates and prints
 Telegram's response. Its prompts are visible input. It does not read Secrets
 Manager or verify `getWebhookInfo`; verify delivery separately.
 
-### AWS admin worker: steps 5 and 6
+### AWS shared EC2 worker: steps 8 and 9
 
-`deploy/aws/5-admin-bot-worker.yaml` creates infrastructure only: an Ubuntu
+`deploy/aws/8-ec2-worker-stack.yaml` creates infrastructure only: an Ubuntu
 26.04 x86_64 t3.micro, a public subnet with no inbound access by default, Session Manager access, an
 instance role for the existing SQS queue and two Secrets Manager secrets,
 a 24 GiB root disk and a separate encrypted 8 GiB SQLite disk. No HTTP ports,
 Elastic IP, Redis, gateway software or bot process are created on EC2.
-The public IP can change after stop/start; step 6 reads the current stack output.
+The public IP can change after stop/start; step 9 reads the current stack output.
 
 Create both secrets beforehand. The admin bot SecretString must be a JSON object
 with `ADMIN_BOT_TOKEN` (non-empty token string) and `ADMIN_BOT_OWNER_ID` (positive
@@ -133,8 +136,8 @@ Never put secret values in template parameters or Git.
 ```bash
 aws cloudformation deploy \
   --region eu-central-1 \
-  --stack-name tgbot-queue-admin-worker \
-  --template-file deploy/aws/5-admin-bot-worker.yaml \
+  --stack-name tgbot-queue-ec2-worker \
+  --template-file deploy/aws/8-ec2-worker-stack.yaml \
   --capabilities CAPABILITY_IAM \
   --parameter-overrides \
     KeyName=your-existing-key-pair \
@@ -147,10 +150,10 @@ is deleted or the volume is replaced. Retention is not a backup: a recreated
 stack creates a fresh disk; reattaching retained data requires a separate,
 explicit recovery operation. No automated backups are configured.
 
-Deploy a published GitHub branch to EC2 by running step 6 locally:
+Deploy a published GitHub branch to EC2 by running step 9 locally:
 
 ```bash
-./deploy/aws/6-deploy-admin-bot.sh
+./deploy/aws/9-deploy-ec2-worker.sh
 # Git branch [current-local-branch]:
 ```
 
@@ -159,14 +162,17 @@ detached checkout, enter a branch explicitly. Uncommitted and unpushed changes
 are not deployed. The script fetches the branch from the public GitHub repository
 on EC2 and runs Docker Compose to build and start the worker.
 
-Step 6 installs Git, Docker and Docker Compose on EC2 and enables Docker.
-The step-5 data EBS volume must already be mounted at `/var/lib/admin-bot`.
-The script does not format disks. The current step-5 template does not yet
-mount the disk automatically.
+Step 9 first inspects the exact data volume through SSM and prints its device,
+filesystem and mountpoint. A blank volume is formatted as ext4 only after the
+operator types `FORMAT`; an existing filesystem is only mounted after a `y`
+confirmation. The script rejects a volume mounted anywhere other than
+`/var/lib/admin-bot`, records the UUID in `/etc/fstab`, then installs Git,
+Docker and Docker Compose. Declining either prompt exits before any Docker
+command runs.
 
 Locally, AWS CLI credentials, Git and Python 3 are required. Optional settings:
 `AWS_REGION` (default `eu-central-1`), `WORKER_STACK` (default
-`tgbot-queue-admin-worker`), `GATEWAY_STACK` (default `tgbot-queue-gateway`).
+`tgbot-queue-ec2-worker`), `GATEWAY_STACK` (default `tgbot-queue-gateway`).
 The script reads CloudFormation outputs and executes one SSM command. The
 instance must be Online in SSM. No SSH or inbound ports are required.
 
@@ -218,12 +224,12 @@ worker or register Telegram webhooks. Deploy in order in `eu-central-1`:
 aws cloudformation deploy \
   --region eu-central-1 \
   --stack-name tgbot-queue-managed-sqs \
-  --template-file deploy/aws/7-managed-sqs-stack.yaml
+  --template-file deploy/aws/5-managed-sqs-stack.yaml
 
 aws cloudformation deploy \
   --region eu-central-1 \
   --stack-name tgbot-queue-managed-lambda \
-  --template-file deploy/aws/8-managed-lambda-stack.yaml \
+  --template-file deploy/aws/6-managed-lambda-stack.yaml \
   --capabilities CAPABILITY_IAM \
   --parameter-overrides \
     WebhookSecretArn=arn:aws:secretsmanager:eu-central-1:ACCOUNT:secret:WEBHOOK
@@ -231,7 +237,7 @@ aws cloudformation deploy \
 aws cloudformation deploy \
   --region eu-central-1 \
   --stack-name tgbot-queue-managed-gateway \
-  --template-file deploy/aws/9-managed-gateway-stack.yaml
+  --template-file deploy/aws/7-managed-gateway-stack.yaml
 ```
 
 All three default to `ProjectName=tgbot-queue-managed`, keeping queue names and
@@ -270,7 +276,7 @@ to the recipient's actual Telegram ID and consumes the link.
 Existing cards show the invitation or activated bot link; pending creations
 show **Продолжить создание**. **Добавить лимит** adds seconds, and **Все боты**
 lists saved bots. The default database is
-`bot_factories/admin_bot/.cache/admin.sqlite3`.
+`bot_factories/managed_bots/admin/.cache/admin.sqlite3`.
 
 Managed handlers accept a video only when its entire duration fits the balance
 and guard against repeated debit for a retried update. These handlers exist in
@@ -321,8 +327,19 @@ duplicate handling for the chosen worker.
 
 ### Admin Docker
 
-`bot_factories/admin_bot/Dockerfile` starts the raw JSON SQS worker.
-Use AWS step 6 to deploy it. The admin bot does not run a Celery app.
+`bot_factories/managed_bots/admin/Dockerfile` starts the raw JSON SQS worker.
+Use AWS step 9 to deploy it. The admin bot does not run a Celery app.
+
+For local Docker runs, copy `bot_factories/managed_bots/.env.example` to
+`bot_factories/managed_bots/.env` and fill in the shared settings. The common
+Compose file runs both workers against the same database volume and maps each
+worker's queue URL to `SQS_QUEUE_URL`. The volume retains its previous name,
+`admin-bot_admin_data`, to reuse existing local admin data.
+Run from the repository root:
+
+```bash
+docker compose --env-file bot_factories/managed_bots/.env -f bot_factories/managed_bots/docker-compose.yml up --build -d
+```
 
 ## Custom bots and verification
 
@@ -337,7 +354,7 @@ Run focused checks with the installed development/test dependencies:
 
 ```bash
 .venv/bin/python -m unittest discover -s deploy/aws/tests -q
-.venv/bin/pytest bot_factories/admin_bot/tests/test_json_worker.py
+.venv/bin/pytest bot_factories/managed_bots/admin/tests/test_json_worker.py
 ```
 
 The FaceSwap integration test requires a running local FaceFusion HTTP service
