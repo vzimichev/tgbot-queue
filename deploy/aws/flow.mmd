@@ -1,0 +1,57 @@
+flowchart TB
+    subgraph telegram["Telegram"]
+        admin_webhook["User Request in Admin Bot"]
+        managed_webhook["User Request in Managed Bot"]
+        admin_response["Admin Bot Response"]
+        creation_request["Managed Bot Creation Request"]
+        managed_response["Managed Bot Response"]
+        faceswap_result["Faceswap Result"]
+    end
+
+    admin_webhook --> admin_gateway
+    managed_webhook --> managed_gateway
+
+    subgraph cloud["Cloud"]
+        admin_gateway["Admin Gateway"]
+        managed_gateway["Managed Gateway"]
+
+        subgraph lambdas["Lambda"]
+            tg_lambda["tg-to-sqs"]
+            managed_lambda["managed-to-sqs"]
+        end
+
+        admin_gateway -->|"/webhook"| tg_lambda
+        managed_gateway -->|"/webhook/managed/{bot_id}"| managed_lambda
+
+        subgraph sqs["SQS"]
+            admin_queue["Admin queue"]
+            managed_queue["Managed queue"]
+            faceswap_queue["Faceswap queue"]
+        end
+
+        subgraph ec2["EC2"]
+            admin["admin-worker"]
+            sqlite[("SQLite")]
+            managed["managed-worker"]
+
+            admin --> sqlite
+            sqlite --> managed
+        end
+
+        tg_lambda --> admin_queue
+        managed_lambda --> managed_queue
+        admin_queue --> admin
+        managed_queue --> managed
+        managed --> faceswap_queue
+    end
+
+    subgraph local["Local"]
+        faceswap["faceswap-bot-worker"]
+    end
+
+    faceswap_queue --> faceswap
+    faceswap --> faceswap_result
+
+    admin --> admin_response
+    admin --> creation_request
+    managed --> managed_response

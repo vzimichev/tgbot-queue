@@ -1,0 +1,387 @@
+#!/usr/bin/env bash
+# Run locally to deploy a published GitHub branch to the step-5 EC2 instance.
+set -euo pipefail
+
+# Step 1: Choose the existing AWS infrastructure to deploy to.
+region=${AWS_REGION:-eu-central-1}
+worker_stack=${WORKER_STACK:-tgbot-queue-ec2-worker}
+gateway_stack=${GATEWAY_STACK:-tgbot-queue-gateway}
+managed_sqs_stack=${MANAGED_SQS_STACK:-tgbot-queue-managed-sqs}
+managed_gateway_stack=${MANAGED_GATEWAY_STACK:-tgbot-queue-managed-gateway}
+# Ask which published branch to deploy; Enter selects the local branch.
+if [[ $# -ne 0 ]]; then
+  echo 'Usage: 9-deploy-ec2-worker.sh' >&2
+  exit 1
+fi
+repo=$(cd "$(dirname "$0")/../.." && pwd)
+current_branch=$(git -C "$repo" branch --show-current)
+read -r -p "Git branch${current_branch:+ [$current_branch]}: " branch
+branch=${branch:-$current_branch}
+if [[ -z "$branch" ]] || ! git check-ref-format --branch "$branch" >/dev/null 2>&1; then
+  echo 'Enter a valid Git branch.' >&2
+  exit 1
+fi
+# Step 3: Prepare temporary deployment files and clean them up on exit.
+repo=$(cd "$(dirname "$0")/../.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Step 4: Read AWS stack outputs to connect the app to the existing infrastructure.
+aws cloudformation describe-stacks --region "$region" --stack-name "$worker_stack" > "$tmp/worker.json"
+aws cloudformation describe-stacks --region "$region" --stack-name "$gateway_stack" > "$tmp/gateway.json"
+aws cloudformation describe-stacks --region "$region" --stack-name "$managed_sqs_stack" > "$tmp/managed-sqs.json"
+aws cloudformation describe-stacks --region "$region" --stack-name "$managed_gateway_stack" > "$tmp/managed-gateway.json"
+python3 - "$tmp" "$region" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+stack = json.loads((root / 'worker.json').read_text())['Stacks'][0]
+if stack['StackStatus'] not in ('CREATE_COMPLETE', 'UPDATE_COMPLETE'):
+    raise SystemExit('Worker stack must be CREATE_COMPLETE or UPDATE_COMPLETE.')
+outputs = {o['OutputKey']: o['OutputValue'] for o in stack['Outputs']}
+gateway = json.loads((root / 'gateway.json').read_text())['Stacks'][0]
+url = next(o['OutputValue'] for o in gateway['Outputs'] if o['OutputKey'] == 'WebhookUrl')
+if not re.fullmatch(r'https://[a-zA-Z0-9.-]+/webhook', url):
+    raise SystemExit('Unexpected gateway webhook URL.')
+instance = outputs['InstanceId']
+volume = outputs['DataVolumeId']
+if not re.fullmatch(r'i-[0-9a-f]+', instance) or not re.fullmatch(r'vol-[0-9a-f]+', volume):
+    raise SystemExit('Unexpected instance ID or EBS volume ID.')
+queue = outputs['QueueUrl']
+managed_sqs = json.loads((root / 'managed-sqs.json').read_text())['Stacks'][0]
+managed_gateway = json.loads((root / 'managed-gateway.json').read_text())['Stacks'][0]
+managed_queue = {o['OutputKey']: o['OutputValue'] for o in managed_sqs['Outputs']}['QueueUrl']
+managed_url = next(o['OutputValue'] for o in managed_gateway['Outputs'] if o['OutputKey'] == 'ManagedWebhookBaseUrl')
+if not re.fullmatch(r'https://[a-zA-Z0-9.-]+/webhook/managed', managed_url):
+    raise SystemExit('Unexpected managed gateway webhook URL.')
+admin_config = {
+    'AWS_DEFAULT_REGION': sys.argv[2], 'SQS_REGION': sys.argv[2],
+    'CELERY_BROKER': 'sqs', 'SQS_QUEUE_URL': queue,
+    'SQS_QUEUE_NAME': queue.rsplit('/', 1)[-1],
+    'ADMIN_BOT_CHILD_WEBHOOK_URL': managed_url,
+    'ADMIN_BOT_SECRET_ARN': outputs['AdminBotSecretArn'],
+    'WEBHOOK_SECRET_ARN': outputs['WebhookSecretArn'],
+}
+managed_config = {
+    'ADMIN_BOT_SECRET_ARN': outputs['AdminBotSecretArn'],
+    'WEBHOOK_SECRET_ARN': outputs['WebhookSecretArn'],
+    'ADMIN_BOT_CHILD_WEBHOOK_URL': managed_url,
+    'AWS_DEFAULT_REGION': sys.argv[2], 'SQS_REGION': sys.argv[2],
+    'SQS_QUEUE_URL': managed_queue,
+    'SQS_QUEUE_NAME': managed_queue.rsplit('/', 1)[-1],
+    'MANAGED_BOT_DATABASE_PATH': '/app/bot_factories/managed_bots/admin/.cache/admin.sqlite3',
+}
+(root / 'runtime.json').write_text(json.dumps({'admin': admin_config, 'managed': managed_config}))
+(root / 'instance').write_text(instance)
+(root / 'volume').write_text(volume)
+
+PY
+instance=$(cat "$tmp/instance")
+volume=$(cat "$tmp/volume")
+online=$(aws ssm describe-instance-information --region "$region" --filters "Key=InstanceIds,Values=$instance" --query 'InstanceInformationList[0].PingStatus' --output text --no-cli-pager)
+[[ "$online" == Online ]] || { echo 'Worker must be Online in SSM before volume inspection.' >&2; exit 1; }
+python3 - "$tmp" "$region" "$instance" "$volume" <<'INSPECT_PY'
+import json
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+root, region, instance, volume = sys.argv[1:]
+probe = f'''python3 - {volume!r} <<'PY'
+import json, subprocess, sys
+serial = sys.argv[1].replace('-', '')
+rows = []
+for line in subprocess.check_output(['lsblk', '-dn', '-o', 'PATH,SERIAL,FSTYPE'], text=True).splitlines():
+    parts = line.split(None, 2)
+    if len(parts) >= 2 and parts[1] == serial:
+        device = parts[0]
+        fstype = parts[2] if len(parts) == 3 else ''
+        mount = subprocess.run(['findmnt', '-n', '-o', 'TARGET', '--source', device], text=True, capture_output=True).stdout.strip()
+        rows.append({{'device': device, 'fstype': fstype, 'mountpoint': mount}})
+if len(rows) != 1:
+    raise SystemExit('Expected exactly one EBS device for the stack data volume')
+print(json.dumps(rows[0]))
+PY'''
+
+def aws(*args):
+    result = subprocess.run(['aws', 'ssm', *args, '--region', region, '--output', 'json', '--no-cli-pager'], capture_output=True, text=True)
+    if result.returncode:
+        raise SystemExit('Unable to inspect the EC2 data volume through SSM.')
+    return json.loads(result.stdout)
+
+response = aws('send-command', '--instance-ids', instance, '--document-name', 'AWS-RunShellScript', '--parameters', json.dumps({'commands': [probe]}))
+command_id = response['Command']['CommandId']
+for _ in range(30):
+    result = aws('get-command-invocation', '--command-id', command_id, '--instance-id', instance)
+    if result['Status'] == 'Success':
+        try:
+            state = json.loads(result['StandardOutputContent'])
+        except (KeyError, json.JSONDecodeError) as error:
+            raise SystemExit('EC2 returned an invalid data-volume state.') from error
+        Path(root, 'volume-state.json').write_text(json.dumps(state))
+        break
+    if result['Status'] not in ('Pending', 'InProgress', 'Delayed'):
+        raise SystemExit('Unable to inspect the EC2 data volume through SSM.')
+    time.sleep(2)
+else:
+    raise SystemExit('Timed out while inspecting the EC2 data volume.')
+INSPECT_PY
+volume_state=$(python3 - "$tmp/volume-state.json" <<'PY'
+import json, sys
+state = json.load(open(sys.argv[1]))
+print(f"device={state['device']} filesystem={state['fstype'] or 'none'} mountpoint={state['mountpoint'] or 'none'}")
+PY
+)
+echo "Data volume $volume: $volume_state"
+mountpoint=$(python3 - "$tmp/volume-state.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))['mountpoint'])
+PY
+)
+fstype=$(python3 - "$tmp/volume-state.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))['fstype'])
+PY
+)
+if [[ -n "$mountpoint" && "$mountpoint" != /var/lib/admin-bot ]]; then
+  echo "Data volume is already mounted at $mountpoint; refusing to move it." >&2
+  exit 1
+elif [[ "$mountpoint" == /var/lib/admin-bot ]]; then
+  volume_mode=mounted
+elif [[ -z "$fstype" ]]; then
+  read -r -p "Empty data volume. Type FORMAT to create an ext4 filesystem: " answer
+  [[ "$answer" == FORMAT ]] || { echo 'Deployment cancelled; volume was not formatted.' >&2; exit 1; }
+  volume_mode=format
+else
+  read -r -p "Mount existing $fstype filesystem at /var/lib/admin-bot? [y/N]: " answer
+  [[ "$answer" =~ ^[Yy]$ ]] || { echo 'Deployment cancelled; volume was not mounted.' >&2; exit 1; }
+  volume_mode=mount
+fi
+# Deploy directly through SSM; no application archive is uploaded.
+python3 - "$tmp" "$region" "$instance" "$volume" "$branch" "$volume_mode" <<'DEPLOY_PY'
+import base64
+import json
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+import time
+
+
+def main():
+    temporary, region, instance, volume, branch, volume_mode = sys.argv[1:]
+    config = base64.b64encode((Path(temporary) / 'runtime.json').read_bytes()).decode()
+    remote = r"""set -euo pipefail
+install -d -m 0755 /opt/admin-bot
+exec 9>/opt/admin-bot/deploy.lock
+flock -n 9 || { echo 'Another deployment is running.' >&2; exit 1; }
+serial="${volume//-/}"
+device=$(lsblk -dn -o PATH,SERIAL | awk -v serial="$serial" '$2 == serial { print $1 }')
+[[ -n "$device" ]] || { echo 'Expected data volume is not attached.' >&2; exit 1; }
+[[ $(wc -l <<< "$device") -eq 1 ]] || { echo 'Expected exactly one data-volume device.' >&2; exit 1; }
+fstype=$(lsblk -dn -o FSTYPE "$device")
+if mountpoint -q /var/lib/admin-bot; then
+  mounted_device=$(findmnt -n -o SOURCE --target /var/lib/admin-bot)
+  mounted_serial=$(lsblk -dn -o SERIAL "$mounted_device")
+  [[ "$mounted_serial" == "$serial" ]] || { echo 'Unexpected database disk; refusing to deploy.' >&2; exit 1; }
+else
+  case "$volume_mode" in
+    format)
+      [[ -z "$fstype" ]] || { echo 'Refusing to format a volume with an existing filesystem.' >&2; exit 1; }
+      mkfs.ext4 -F "$device"
+      ;;
+    mount)
+      [[ -n "$fstype" ]] || { echo 'Refusing to mount an unformatted volume.' >&2; exit 1; }
+      ;;
+    *) echo 'Data volume is not mounted.' >&2; exit 1 ;;
+  esac
+  install -d -m 0700 /var/lib/admin-bot
+  uuid=$(blkid -s UUID -o value "$device")
+  grep -Fqx "UUID=$uuid /var/lib/admin-bot ext4 defaults,nofail 0 2" /etc/fstab || echo "UUID=$uuid /var/lib/admin-bot ext4 defaults,nofail 0 2" >> /etc/fstab
+  mount /var/lib/admin-bot
+fi
+mountpoint -q /var/lib/admin-bot || { echo 'Database disk was not mounted.' >&2; exit 1; }
+echo 'Installing Git and Docker Compose...'
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq git docker.io docker-compose-v2
+systemctl enable --now docker
+install -d -m 0755 /opt/admin-bot
+install -d -m 0700 /var/lib/admin-bot/db
+cd /opt/admin-bot
+cat > start.py <<'START_PY'
+import json
+import os
+from pathlib import Path
+import sys
+
+import boto3
+
+config = json.loads(Path('/run/admin-bot/config.json').read_text())
+kind = os.environ.get('WORKER_KIND', 'admin')
+if kind not in ('admin', 'managed'):
+    sys.exit('Unknown worker kind')
+runtime = config.get(kind, config)
+os.environ.update(runtime)
+try:
+    client = boto3.client('secretsmanager')
+    admin = json.loads(client.get_secret_value(SecretId=runtime['ADMIN_BOT_SECRET_ARN'])['SecretString'])
+    token = admin['ADMIN_BOT_TOKEN']
+    owner = admin['ADMIN_BOT_OWNER_ID']
+    if isinstance(owner, bool) or not isinstance(owner, (str, int)):
+        raise ValueError('Invalid owner ID type')
+    owner = str(owner)
+    if not owner.isascii() or not owner.isdecimal() or int(owner) <= 0:
+        raise ValueError('Owner ID must be a positive integer')
+    secret = client.get_secret_value(SecretId=runtime['WEBHOOK_SECRET_ARN'])['SecretString']
+    if not isinstance(token, str) or not token or not secret or token.startswith('REPLACE_ME') or secret.startswith('REPLACE_ME'):
+        raise ValueError('Secret is empty or still a placeholder')
+except Exception:
+    sys.exit('Unable to load valid worker secrets from Secrets Manager')
+os.environ.update(ADMIN_BOT_TOKEN=token,
+                  ADMIN_BOT_OWNER_ID=owner, WEBHOOK_SECRET_TOKEN=secret)
+if sys.argv[1:] == ['--check']:
+    boto3.client('sqs').get_queue_attributes(
+        QueueUrl=runtime['SQS_QUEUE_URL'], AttributeNames=['VisibilityTimeout'])
+    sys.exit(0)
+module = f'bot_factories.managed_bots.{kind}.json_worker'
+os.execvp(sys.executable, [sys.executable, '-m', module])
+START_PY
+cd /opt/admin-bot
+echo "Downloading GitHub version: $ref"
+if [[ ! -d repo/.git ]]; then
+  git clone --no-checkout https://github.com/vzimichev/tgbot-queue.git repo
+fi
+git -C repo fetch --depth=1 https://github.com/vzimichev/tgbot-queue.git "refs/heads/$ref"
+release=$(git -C repo rev-parse --verify "FETCH_HEAD^{commit}")
+echo "Selected branch: $ref; Git commit: $release"
+mkdir -p /opt/admin-bot/releases
+source_dir=$(mktemp -d "/opt/admin-bot/releases/$release.XXXXXX")
+git -C repo archive "$release" | tar -x -C "$source_dir"
+export ADMIN_BOT_SOURCE="$source_dir" ADMIN_BOT_RELEASE="$release"
+cat > compose.yaml <<'YAML'
+name: admin-bot-aws
+services:
+  admin:
+    image: admin-bot:${ADMIN_BOT_RELEASE:?}
+    build:
+      context: ${ADMIN_BOT_SOURCE:?}
+      dockerfile: bot_factories/managed_bots/admin/Dockerfile
+    container_name: admin-bot-worker
+    restart: unless-stopped
+    entrypoint: [python, /run/admin-bot/start.py]
+    volumes:
+      - /var/lib/admin-bot/db:/app/bot_factories/managed_bots/admin/.cache
+      - /opt/admin-bot/runtime.json:/run/admin-bot/config.json:ro
+      - /opt/admin-bot/start.py:/run/admin-bot/start.py:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+  managed:
+    image: managed-bot:${ADMIN_BOT_RELEASE:?}
+    build:
+      context: ${ADMIN_BOT_SOURCE:?}
+      dockerfile: bot_factories/managed_bots/managed/Dockerfile
+    container_name: managed-bot-worker
+    restart: unless-stopped
+    environment:
+      WORKER_KIND: managed
+    entrypoint: [python, /run/admin-bot/start.py]
+    volumes:
+      - /var/lib/admin-bot/db:/app/bot_factories/managed_bots/admin/.cache
+      - /opt/admin-bot/runtime.json:/run/admin-bot/config.json:ro
+      - /opt/admin-bot/start.py:/run/admin-bot/start.py:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+YAML
+echo 'Stopping admin bot (downtime starts)...'
+if systemctl cat admin-bot.service >/dev/null 2>&1; then
+  systemctl disable --now admin-bot.service
+fi
+docker compose down
+echo 'Building application images...'
+docker compose build
+expected_image=$(docker image inspect --format '{{.Id}}' "admin-bot:$release")
+expected_managed_image=$(docker image inspect --format '{{.Id}}' "managed-bot:$release")
+echo 'Checking secrets and SQS access...'
+docker compose run --interactive=false -T --rm --no-deps admin --check
+docker compose run --interactive=false -T --rm --no-deps managed --check
+echo 'Starting admin bot...'
+docker compose up -d --no-build --force-recreate
+echo 'Waiting for JSON worker readiness...'
+for attempt in $(seq 1 30); do
+  actual_image=$(docker inspect --format '{{.Image}}' admin-bot-worker)
+  [[ "$actual_image" == "$expected_image" ]] || { echo 'Container image differs from the built image.' >&2; exit 1; }
+  state=$(docker inspect --format '{{.State.Status}} {{.RestartCount}}' admin-bot-worker)
+  [[ "$state" == 'running 0' ]] || { echo "Worker failed startup: $state" >&2; exit 1; }
+  actual_managed_image=$(docker inspect --format '{{.Image}}' managed-bot-worker)
+  [[ "$actual_managed_image" == "$expected_managed_image" ]] || { echo 'Managed container image differs from the built image.' >&2; exit 1; }
+  managed_state=$(docker inspect --format '{{.State.Status}} {{.RestartCount}}' managed-bot-worker)
+  [[ "$managed_state" == 'running 0' ]] || { echo "Managed worker failed startup: $managed_state" >&2; exit 1; }
+  if docker logs admin-bot-worker > worker-startup.log 2>&1 && docker logs managed-bot-worker > managed-worker-startup.log 2>&1 && grep -q 'Admin JSON worker ready\.' worker-startup.log && grep -q 'Managed JSON worker ready\.' managed-worker-startup.log; then
+    echo "DEPLOY_OK commit=$release image=$actual_image"
+    exit 0
+  fi
+  sleep 2
+done
+echo 'Worker did not become ready. Inspect: cd /opt/admin-bot && docker compose logs' >&2
+exit 1
+"""
+    # Only non-secret configuration is sent through SSM.
+    prefix = f'ref={shlex.quote(branch)}\nvolume={shlex.quote(volume)}\nvolume_mode={shlex.quote(volume_mode)}\n'
+    insert = f'umask 077; echo {config} | base64 -d > /opt/admin-bot/runtime.json\n'
+    remote = prefix + remote.replace("cat > start.py", insert + "cat > start.py", 1)
+    online = aws(region, 'describe-instance-information', '--filters', f'Key=InstanceIds,Values={instance}')
+    if not any(item['PingStatus'] == 'Online' for item in online['InstanceInformationList']):
+        raise SystemExit('Worker must be Online in SSM before deployment.')
+    response = aws(region, 'send-command', '--instance-ids', instance,
+                   '--document-name', 'AWS-RunShellScript', '--parameters',
+                   json.dumps({'commands': ["bash -s <<'ADMIN_DEPLOY'\n" + remote + '\nADMIN_DEPLOY'],
+                               'executionTimeout': ['3600']}))
+    command_id = response['Command']['CommandId']
+    print(f'Deploying {branch} on {instance}...', flush=True)
+    deadline = time.monotonic() + 4200
+    shown = ''
+    while time.monotonic() < deadline:
+        result = aws(region, 'get-command-invocation', '--command-id', command_id, '--instance-id', instance)
+        if result:
+            output = result.get('StandardOutputContent', '')
+            if output.startswith(shown):
+                print(output[len(shown):], end='', flush=True)
+            shown = output
+            if result['Status'] == 'Success':
+                if not any(line.startswith('DEPLOY_OK commit=') for line in output.splitlines()):
+                    raise SystemExit(f'Deployment did not confirm worker readiness. SSM command: {command_id}')
+                print('Deployment complete. Verify the Telegram flow separately.')
+                return
+            if result['Status'] not in ('Pending', 'InProgress', 'Delayed'):
+                print(result.get('StandardErrorContent', ''), file=sys.stderr)
+                raise SystemExit(f"Deployment failed: {result['Status']}. SSM command: {command_id}")
+        time.sleep(2)
+    raise SystemExit(f'SSM command still running: {command_id}. Inspect it before retrying.')
+
+
+def aws(region, *args):
+    result = subprocess.run(['aws', 'ssm', *args, '--region', region, '--output', 'json', '--no-cli-pager'],
+                            capture_output=True, text=True)
+    if result.returncode:
+        if 'InvocationDoesNotExist' in result.stderr:
+            return None
+        raise SystemExit(f'SSM {args[0]} failed; check credentials and permissions.')
+    return json.loads(result.stdout)
+
+
+if __name__ == '__main__':
+    main()
+DEPLOY_PY

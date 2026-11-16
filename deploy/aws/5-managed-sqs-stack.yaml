@@ -1,0 +1,74 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Managed Telegram updates queue and DLQ. Deploy before the Lambda publisher; no worker required.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: tgbot-queue-managed
+    AllowedPattern: ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$
+  SqsVisibilityTimeout:
+    Type: Number
+    Default: 3600
+    MinValue: 0
+    MaxValue: 43200
+    Description: Seconds an in-progress managed update remains hidden in SQS.
+
+Resources:
+  TelegramUpdatesQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      QueueName: !Sub ${ProjectName}-telegram-updates
+      ReceiveMessageWaitTimeSeconds: 20
+      VisibilityTimeout: !Ref SqsVisibilityTimeout
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      QueueName: !Sub ${ProjectName}-telegram-updates-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  DeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Unprocessed Telegram updates require inspection; no notification destination configured.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt DeadLetterQueue.QueueName
+
+Outputs:
+  QueueName:
+    Value: !GetAtt TelegramUpdatesQueue.QueueName
+  QueueUrl:
+    Value: !Ref TelegramUpdatesQueue
+    Export:
+      Name: !Sub ${ProjectName}-QueueUrl
+  QueueArn:
+    Value: !GetAtt TelegramUpdatesQueue.Arn
+    Export:
+      Name: !Sub ${ProjectName}-QueueArn
+  DeadLetterQueueUrl:
+    Value: !Ref DeadLetterQueue
+  DeadLetterQueueArn:
+    Value: !GetAtt DeadLetterQueue.Arn

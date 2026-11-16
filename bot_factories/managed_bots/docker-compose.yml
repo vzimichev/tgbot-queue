@@ -1,0 +1,31 @@
+name: managed-bots
+
+services:
+  admin:
+    build:
+      context: ../..
+      dockerfile: bot_factories/managed_bots/admin/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SQS_QUEUE_URL: ${ADMIN_BOT_SQS_QUEUE_URL:?Set ADMIN_BOT_SQS_QUEUE_URL}
+      MANAGED_BOT_DATABASE_PATH: /app/bot_factories/managed_bots/admin/.cache/admin.sqlite3
+    volumes:
+      - managed_data:/app/bot_factories/managed_bots/admin/.cache
+
+  managed:
+    build:
+      context: ../..
+      dockerfile: bot_factories/managed_bots/managed/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SQS_QUEUE_URL: ${MANAGED_BOT_SQS_QUEUE_URL:?Set MANAGED_BOT_SQS_QUEUE_URL}
+      MANAGED_BOT_DATABASE_PATH: /app/bot_factories/managed_bots/admin/.cache/admin.sqlite3
+    volumes:
+      - managed_data:/app/bot_factories/managed_bots/admin/.cache
+
+volumes:
+  managed_data:
+    # Reuse the existing local admin database volume.
+    name: admin-bot_admin_data

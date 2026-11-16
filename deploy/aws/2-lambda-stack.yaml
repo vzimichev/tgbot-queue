@@ -1,0 +1,128 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Minimal Telegram-to-SQS Lambda with inline Python code; no build required.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: tgbot-queue
+    AllowedPattern: ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$
+    Description: Must match ProjectName of the SQS stack in this account and region.
+  FunctionName:
+    Type: String
+    Default: tg-to-sqs
+    Description: Must be unused for a new stack; existing functions require a separate resource import.
+  WebhookSecretArn:
+    Type: String
+    Description: Full ARN of the existing webhook secret; SecretString is the plain token, not JSON.
+
+Resources:
+  LambdaLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${FunctionName}
+      RetentionInDays: 14
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: telegram-webhook-publish
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource:
+                  Fn::ImportValue: !Sub ${ProjectName}-QueueArn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref WebhookSecretArn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt LambdaLogs.Arn
+
+  WebhookFunction:
+    Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      FunctionName: !Ref FunctionName
+      Description: Receives Telegram webhooks, validates the webhook secret, and forwards the original request body to SQS.
+      Runtime: python3.12
+      Architectures:
+        - x86_64
+      Handler: index.handler
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 25
+      MemorySize: 128
+      LoggingConfig:
+        LogGroup: !Ref LambdaLogs
+      Environment:
+        Variables:
+          SQS_QUEUE_URL:
+            Fn::ImportValue: !Sub ${ProjectName}-QueueUrl
+          WEBHOOK_SECRET_ARN: !Ref WebhookSecretArn
+      Code:
+        ZipFile: |
+          import base64
+          import hmac
+          import logging
+          import os
+          
+          import boto3
+          
+          
+          logger = logging.getLogger(__name__)
+          sqs = boto3.client("sqs")
+          
+          QUEUE_URL = os.environ["SQS_QUEUE_URL"]
+          WEBHOOK_SECRET = boto3.client("secretsmanager").get_secret_value(
+              SecretId=os.environ["WEBHOOK_SECRET_ARN"]
+          )["SecretString"].encode("utf-8")
+          
+          
+          def handler(event, context):
+              headers = {
+                  key.lower(): value
+                  for key, value in (event.get("headers") or {}).items()
+              }
+              supplied_secret = headers.get(
+                  "x-telegram-bot-api-secret-token", ""
+              ).encode("utf-8")
+          
+              if not hmac.compare_digest(supplied_secret, WEBHOOK_SECRET):
+                  return {"statusCode": 403, "body": "Forbidden"}
+          
+              body = event.get("body") or ""
+              if event.get("isBase64Encoded"):
+                  body = base64.b64decode(body).decode("utf-8")
+          
+              try:
+                  sqs.send_message(
+                      QueueUrl=QUEUE_URL,
+                      MessageBody=body,
+                  )
+              except Exception:
+                  logger.exception("Failed to send message to SQS")
+                  return {"statusCode": 503, "body": "Queue unavailable"}
+          
+              return {"statusCode": 200, "body": "OK"}
+
+Outputs:
+  WebhookFunctionArn:
+    Value: !GetAtt WebhookFunction.Arn
+    Export:
+      Name: !Sub ${ProjectName}-WebhookFunctionArn
+  WebhookFunctionName:
+    Value: !Ref WebhookFunction
+  LambdaRoleArn:
+    Value: !GetAtt LambdaRole.Arn
