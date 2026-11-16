@@ -68,10 +68,13 @@ admin_config = {
     'WEBHOOK_SECRET_ARN': outputs['WebhookSecretArn'],
 }
 managed_config = {
+    'ADMIN_BOT_SECRET_ARN': outputs['AdminBotSecretArn'],
+    'WEBHOOK_SECRET_ARN': outputs['WebhookSecretArn'],
+    'ADMIN_BOT_CHILD_WEBHOOK_URL': managed_url,
     'AWS_DEFAULT_REGION': sys.argv[2], 'SQS_REGION': sys.argv[2],
     'SQS_QUEUE_URL': managed_queue,
     'SQS_QUEUE_NAME': managed_queue.rsplit('/', 1)[-1],
-    'MANAGED_BOT_DATABASE_PATH': '/app/bot_factories/admin_bot/.cache/admin.sqlite3',
+    'MANAGED_BOT_DATABASE_PATH': '/app/bot_factories/managed_bots/admin/.cache/admin.sqlite3',
 }
 (root / 'runtime.json').write_text(json.dumps({'admin': admin_config, 'managed': managed_config}))
 (root / 'instance').write_text(instance)
@@ -226,12 +229,6 @@ if kind not in ('admin', 'managed'):
     sys.exit('Unknown worker kind')
 runtime = config.get(kind, config)
 os.environ.update(runtime)
-if kind == 'managed':
-    if sys.argv[1:] == ['--check']:
-        boto3.client('sqs').get_queue_attributes(
-            QueueUrl=runtime['SQS_QUEUE_URL'], AttributeNames=['VisibilityTimeout'])
-        sys.exit(0)
-    os.execvp(sys.executable, [sys.executable, '-m', 'bot_factories.managed_bot.json_worker'])
 try:
     client = boto3.client('secretsmanager')
     admin = json.loads(client.get_secret_value(SecretId=runtime['ADMIN_BOT_SECRET_ARN'])['SecretString'])
@@ -247,13 +244,14 @@ try:
         raise ValueError('Secret is empty or still a placeholder')
 except Exception:
     sys.exit('Unable to load valid worker secrets from Secrets Manager')
-os.environ.update(ADMIN_BOT_TOKEN=token, TELEGRAM_TOKEN=token,
+os.environ.update(ADMIN_BOT_TOKEN=token,
                   ADMIN_BOT_OWNER_ID=owner, WEBHOOK_SECRET_TOKEN=secret)
 if sys.argv[1:] == ['--check']:
     boto3.client('sqs').get_queue_attributes(
         QueueUrl=runtime['SQS_QUEUE_URL'], AttributeNames=['VisibilityTimeout'])
     sys.exit(0)
-os.execvp(sys.executable, [sys.executable, '-m', 'bot_factories.admin_bot.json_worker'])
+module = f'bot_factories.managed_bots.{kind}.json_worker'
+os.execvp(sys.executable, [sys.executable, '-m', module])
 START_PY
 cd /opt/admin-bot
 echo "Downloading GitHub version: $ref"
@@ -274,12 +272,12 @@ services:
     image: admin-bot:${ADMIN_BOT_RELEASE:?}
     build:
       context: ${ADMIN_BOT_SOURCE:?}
-      dockerfile: bot_factories/admin_bot/Dockerfile
+      dockerfile: bot_factories/managed_bots/admin/Dockerfile
     container_name: admin-bot-worker
     restart: unless-stopped
     entrypoint: [python, /run/admin-bot/start.py]
     volumes:
-      - /var/lib/admin-bot/db:/app/bot_factories/admin_bot/.cache
+      - /var/lib/admin-bot/db:/app/bot_factories/managed_bots/admin/.cache
       - /opt/admin-bot/runtime.json:/run/admin-bot/config.json:ro
       - /opt/admin-bot/start.py:/run/admin-bot/start.py:ro
     logging:
@@ -288,14 +286,17 @@ services:
         max-size: 10m
         max-file: '3'
   managed:
-    image: admin-bot:${ADMIN_BOT_RELEASE:?}
+    image: managed-bot:${ADMIN_BOT_RELEASE:?}
+    build:
+      context: ${ADMIN_BOT_SOURCE:?}
+      dockerfile: bot_factories/managed_bots/managed/Dockerfile
     container_name: managed-bot-worker
     restart: unless-stopped
     environment:
       WORKER_KIND: managed
     entrypoint: [python, /run/admin-bot/start.py]
     volumes:
-      - /var/lib/admin-bot/db:/app/bot_factories/admin_bot/.cache
+      - /var/lib/admin-bot/db:/app/bot_factories/managed_bots/admin/.cache
       - /opt/admin-bot/runtime.json:/run/admin-bot/config.json:ro
       - /opt/admin-bot/start.py:/run/admin-bot/start.py:ro
     logging:
@@ -309,9 +310,10 @@ if systemctl cat admin-bot.service >/dev/null 2>&1; then
   systemctl disable --now admin-bot.service
 fi
 docker compose down
-echo 'Building application image...'
+echo 'Building application images...'
 docker compose build
 expected_image=$(docker image inspect --format '{{.Id}}' "admin-bot:$release")
+expected_managed_image=$(docker image inspect --format '{{.Id}}' "managed-bot:$release")
 echo 'Checking secrets and SQS access...'
 docker compose run --interactive=false -T --rm --no-deps admin --check
 docker compose run --interactive=false -T --rm --no-deps managed --check
@@ -323,6 +325,8 @@ for attempt in $(seq 1 30); do
   [[ "$actual_image" == "$expected_image" ]] || { echo 'Container image differs from the built image.' >&2; exit 1; }
   state=$(docker inspect --format '{{.State.Status}} {{.RestartCount}}' admin-bot-worker)
   [[ "$state" == 'running 0' ]] || { echo "Worker failed startup: $state" >&2; exit 1; }
+  actual_managed_image=$(docker inspect --format '{{.Image}}' managed-bot-worker)
+  [[ "$actual_managed_image" == "$expected_managed_image" ]] || { echo 'Managed container image differs from the built image.' >&2; exit 1; }
   managed_state=$(docker inspect --format '{{.State.Status}} {{.RestartCount}}' managed-bot-worker)
   [[ "$managed_state" == 'running 0' ]] || { echo "Managed worker failed startup: $managed_state" >&2; exit 1; }
   if docker logs admin-bot-worker > worker-startup.log 2>&1 && docker logs managed-bot-worker > managed-worker-startup.log 2>&1 && grep -q 'Admin JSON worker ready\.' worker-startup.log && grep -q 'Managed JSON worker ready\.' managed-worker-startup.log; then

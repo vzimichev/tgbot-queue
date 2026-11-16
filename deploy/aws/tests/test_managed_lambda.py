@@ -9,7 +9,7 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
-from shared.managed_webhook import managed_bot_webhook_secret
+from bot_factories.managed_bots.shared.managed_webhook import managed_bot_webhook_secret
 
 
 TEMPLATE = Path(__file__).resolve().parents[1] / '6-managed-lambda-stack.yaml'

@@ -40,9 +40,9 @@ contracts. Do not connect a Celery worker to the raw JSON ingress queues.
 | `deploy/aws/` | Numbered CloudFormation templates, registration/deployment scripts and migration status |
 | `worker/` | Shared Celery factory and task dispatch |
 | `shared/` | Settings, webhook secrets and HTTP job client |
-| `bot_factories/admin_bot/` | Owner-only admin routes and admin JSON worker |
-| `bot_factories/managed_bot/` | Managed-bot routes and managed JSON worker |
-| `shared/managed_bots/` | Shared managed-bot lifecycle, ledger and SQLite persistence |
+| `bot_factories/managed_bots/admin/` | Owner-only admin routes and admin JSON worker |
+| `bot_factories/managed_bots/managed/` | Managed-bot routes and managed JSON worker |
+| `bot_factories/managed_bots/shared/` | Shared managed-bot lifecycle, ledger and SQLite persistence |
 | `bot_factories/echo_bot/` | Echo Celery bot |
 | `bot_factories/faceswap_bot/` | FaceSwap Celery bot and FaceFusion integration |
 
@@ -276,7 +276,7 @@ to the recipient's actual Telegram ID and consumes the link.
 Existing cards show the invitation or activated bot link; pending creations
 show **Продолжить создание**. **Добавить лимит** adds seconds, and **Все боты**
 lists saved bots. The default database is
-`bot_factories/admin_bot/.cache/admin.sqlite3`.
+`bot_factories/managed_bots/admin/.cache/admin.sqlite3`.
 
 Managed handlers accept a video only when its entire duration fits the balance
 and guard against repeated debit for a retried update. These handlers exist in
@@ -327,8 +327,19 @@ duplicate handling for the chosen worker.
 
 ### Admin Docker
 
-`bot_factories/admin_bot/Dockerfile` starts the raw JSON SQS worker.
+`bot_factories/managed_bots/admin/Dockerfile` starts the raw JSON SQS worker.
 Use AWS step 9 to deploy it. The admin bot does not run a Celery app.
+
+For local Docker runs, copy `bot_factories/managed_bots/.env.example` to
+`bot_factories/managed_bots/.env` and fill in the shared settings. The common
+Compose file runs both workers against the same database volume and maps each
+worker's queue URL to `SQS_QUEUE_URL`. The volume retains its previous name,
+`admin-bot_admin_data`, to reuse existing local admin data.
+Run from the repository root:
+
+```bash
+docker compose --env-file bot_factories/managed_bots/.env -f bot_factories/managed_bots/docker-compose.yml up --build -d
+```
 
 ## Custom bots and verification
 
@@ -343,7 +354,7 @@ Run focused checks with the installed development/test dependencies:
 
 ```bash
 .venv/bin/python -m unittest discover -s deploy/aws/tests -q
-.venv/bin/pytest bot_factories/admin_bot/tests/test_json_worker.py
+.venv/bin/pytest bot_factories/managed_bots/admin/tests/test_json_worker.py
 ```
 
 The FaceSwap integration test requires a running local FaceFusion HTTP service

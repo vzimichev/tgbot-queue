@@ -124,6 +124,9 @@ else:
         self.assertIn('FETCH_HEAD^{commit}', command)
         self.assertIn('mktemp -d "/opt/admin-bot/releases/$release.XXXXXX"', command)
         self.assertIn('"$actual_image" == "$expected_image"', command)
+        self.assertIn('image: managed-bot:${ADMIN_BOT_RELEASE:?}', command)
+        self.assertIn('dockerfile: bot_factories/managed_bots/managed/Dockerfile', command)
+        self.assertIn('"$actual_managed_image" == "$expected_managed_image"', command)
         self.assertIn('flock -n 9', command)
 
     def test_explicit_branch_overrides_current_branch(self):
@@ -184,7 +187,7 @@ else:
 
 
 class WorkerSecretTests(unittest.TestCase):
-    def run_entrypoint(self, admin, check=True):
+    def run_entrypoint(self, admin, check=True, kind="admin"):
         code = SCRIPT.read_text().split("<<'DEPLOY_PY'\n", 1)[1].split('\nDEPLOY_PY\n', 1)[0]
         tree = ast.parse(code)
         node = next(n for n in ast.walk(tree) if isinstance(n, ast.Assign)
@@ -192,18 +195,22 @@ class WorkerSecretTests(unittest.TestCase):
         remote = ast.literal_eval(node.value)
         entrypoint = remote.split("<<'START_PY'\n", 1)[1].split('\nSTART_PY\n', 1)[0]
         config = {'ADMIN_BOT_SECRET_ARN': 'arn:admin', 'WEBHOOK_SECRET_ARN': 'arn:webhook',
-                  'SQS_QUEUE_URL': 'https://example/queue'}
+                  'SQS_QUEUE_URL': f'https://example/{kind}-queue'}
+        config = {kind: config}
         secrets = Mock()
         secrets.get_secret_value.side_effect = lambda **kwargs: {
             'SecretString': admin if kwargs['SecretId'] == 'arn:admin' else 'webhook-value'}
         sqs = Mock()
         boto = types.SimpleNamespace(client=lambda name: secrets if name == 'secretsmanager' else sqs)
-        with patch.dict('sys.modules', boto3=boto), patch.dict(os.environ, {}, clear=True), \
+        with patch.dict('sys.modules', boto3=boto), patch.dict(os.environ, {'WORKER_KIND': kind}, clear=True), \
                 patch('pathlib.Path.read_text', return_value=json.dumps(config)), \
                 patch('sys.argv', ['start.py'] + (['--check'] if check else [])), \
                 patch('os.execvp', side_effect=lambda *args: (_ for _ in ()).throw(SystemExit(0))) as execute:
             with self.assertRaises(SystemExit) as stopped:
                 exec(compile(entrypoint, 'start.py', 'exec'), {})
+            if execute.called:
+                self.assertEqual(execute.call_args.args[1][-1],
+                                 f'bot_factories.managed_bots.{kind}.json_worker')
             result = (stopped.exception.code, dict(os.environ), sqs, execute.called)
         return result
 
@@ -214,7 +221,7 @@ class WorkerSecretTests(unittest.TestCase):
                     'ADMIN_BOT_TOKEN': 'test-token', 'ADMIN_BOT_OWNER_ID': owner}), check=False)
                 self.assertEqual(code, 0)
                 self.assertEqual(env['ADMIN_BOT_OWNER_ID'], '12345')
-                self.assertEqual(env['TELEGRAM_TOKEN'], 'test-token')
+                self.assertEqual(env['ADMIN_BOT_TOKEN'], 'test-token')
                 self.assertTrue(executed)
                 sqs.get_queue_attributes.assert_not_called()
 
@@ -224,6 +231,33 @@ class WorkerSecretTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertFalse(executed)
         sqs.get_queue_attributes.assert_called_once()
+
+    def test_managed_loads_secrets_before_check_or_start(self):
+        for check in (False, True):
+            with self.subTest(check=check):
+                code, env, sqs, executed = self.run_entrypoint(json.dumps({
+                    'ADMIN_BOT_TOKEN': 'test-token', 'ADMIN_BOT_OWNER_ID': 42}),
+                    check=check, kind='managed')
+                self.assertEqual(code, 0)
+                self.assertEqual(env['ADMIN_BOT_TOKEN'], 'test-token')
+                self.assertEqual(env['WEBHOOK_SECRET_TOKEN'], 'webhook-value')
+                self.assertEqual(executed, not check)
+                if check:
+                    sqs.get_queue_attributes.assert_called_once_with(
+                        QueueUrl='https://example/managed-queue',
+                        AttributeNames=['VisibilityTimeout'])
+                else:
+                    sqs.get_queue_attributes.assert_not_called()
+
+    def test_managed_rejects_invalid_secret_before_check_or_start(self):
+        for check in (False, True):
+            with self.subTest(check=check):
+                code, env, sqs, executed = self.run_entrypoint(
+                    'private-token', check=check, kind='managed')
+                self.assertEqual(code, 'Unable to load valid worker secrets from Secrets Manager')
+                self.assertNotIn('private-token', str(code))
+                self.assertFalse(executed)
+                sqs.get_queue_attributes.assert_not_called()
 
     def test_invalid_secrets_fail_without_leaking_values(self):
         invalid = ['private-token', '{}', json.dumps({'ADMIN_BOT_TOKEN': 'private-token'})]

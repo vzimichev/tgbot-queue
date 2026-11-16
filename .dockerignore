@@ -10,3 +10,5 @@
 bot_factories/*/tests/data
 deploy/docker/certbot-webroot
 deploy/docker/nginx.active.conf
+bot_factories/managed_bots/**/tests
+shared/tests
