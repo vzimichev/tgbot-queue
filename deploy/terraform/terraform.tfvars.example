@@ -1,0 +1,9 @@
+aws_region = "eu-central-1"
+key_name = "existing-key-pair"
+admin_bot_secret_arn = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:admin-example"
+webhook_secret_arn = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:webhook-example"
+# Change names when deploying alongside the existing CloudFormation resources:
+# project_name = "tgbot-queue-tf"
+# managed_project_name = "tgbot-queue-managed-tf"
+# function_name = "tg-to-sqs-tf"
+# managed_function_name = "managed-to-sqs-tf"
